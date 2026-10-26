@@ -57,7 +57,7 @@ jobs:
           sed -i 's/-lglib-2.0 -lorc-0.4/-lglib-2.0 -lpcre2-8 -lorc-0.4/' \
             src/VideoReceiver/VideoReceiver.pri
 
-      - name: Install Qt
+      - name: Install Qt (armv7 host tools)
         uses: jurplel/install-qt-action@v3
         with:
           version:      ${{ env.QT_VERSION }}
@@ -68,13 +68,20 @@ jobs:
 
       - name: Install Qt android_arm64_v8a via aqt 2.x
         run: |
-          # aqt 3.x fails to parse Qt 5.15.2 android_arm64_v8a package XML.
-          # aqt 2.x uses a different parser that handles the older Qt 5.15.2 package format.
           pip install "aqtinstall==2.1.0" -q
-          python -m aqt install linux android ${{ env.QT_VERSION }} android_arm64_v8a \
-            -O "${{ runner.temp }}/Qt" \
-            -m qtcharts
-          # Prepend arm64 Qt bin to PATH so arm64 qmake is used (generates correct deployment JSON)
+          # aqt 2.x argument order: install <version> <host> <target> [arch]
+          # (aqt 3.x reversed host/target/version, but 2.x is version-first)
+          if python -m aqt install ${{ env.QT_VERSION }} linux android android_arm64_v8a \
+              -O "${{ runner.temp }}/Qt" \
+              -m qtcharts; then
+            echo "Installed arm64 Qt from primary CDN"
+          else
+            echo "Primary CDN failed, trying OCF mirror..."
+            python -m aqt install ${{ env.QT_VERSION }} linux android android_arm64_v8a \
+              --base https://mirrors.ocf.berkeley.edu/qt/ \
+              -O "${{ runner.temp }}/Qt" \
+              -m qtcharts
+          fi
           echo "${{ runner.temp }}/Qt/${{ env.QT_VERSION }}/android_arm64_v8a/bin" >> $GITHUB_PATH
 
       - name: Install ccache
@@ -152,19 +159,11 @@ jobs:
 
       - name: Locate and stage APK
         run: |
-          echo "=== Searching for APKs ==="
-          find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null || echo "No APKs found in shadow_build_dir"
-          find ${{ github.workspace }} -name "*.apk" 2>/dev/null || echo "No APKs found in workspace"
-          echo "=== Listing package dir (if exists) ==="
-          ls -la ${{ runner.temp }}/shadow_build_dir/package/ 2>/dev/null || echo "package dir does not exist"
-          echo "=== Listing android-build outputs ==="
-          find ${{ runner.temp }}/shadow_build_dir -path "*/outputs/apk*" -type f 2>/dev/null || echo "No apk outputs found"
           APK=$(find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null | head -1)
           if [ -n "$APK" ]; then
             echo "Found APK at: $APK"
             mkdir -p ${{ runner.temp }}/shadow_build_dir/package
             cp "$APK" ${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}
-            echo "Staged to ${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}"
           else
             echo "ERROR: No APK found anywhere after build"
             exit 1

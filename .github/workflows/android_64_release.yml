@@ -134,6 +134,7 @@ jobs:
         run:  |
             qmake -r ${SOURCE_DIR}/qgroundcontrol.pro -spec android-clang CONFIG+=${BUILD_TYPE} CONFIG+=installer ANDROID_ABIS="arm64-v8a"
             make -j2
+            make apk
 
       - name: ccache post-run
         run:  ccache -s

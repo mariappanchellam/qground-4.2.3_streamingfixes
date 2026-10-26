@@ -46,7 +46,7 @@ jobs:
             libs/qmlglsink/gst-plugins-good/ext/qt/gstqsgtexture.cc \
             libs/qmlglsink/gst-plugins-good/ext/qt/qtwindow.cc \
             libs/qmlglsink/gst-plugins-good/ext/qt/qtitem.cc; do
-            sed -i 's/static volatile gsize _debug/static gsize _debug/g' "$f"
+            sed -i 's/static volatile gsize/static gsize/g' "$f"
           done
 
       - name: Install Qt
@@ -57,7 +57,6 @@ jobs:
           target:       android
           dir:          ${{ runner.temp }}
           modules:      qtcharts
-          mirror:       https://ftp.jaist.ac.jp/pub/qtproject
 
       - name: Install ccache
         run:  sudo apt-get install ccache

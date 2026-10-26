@@ -49,6 +49,12 @@ jobs:
             sed -i 's/static volatile gsize/static gsize/g' "$f"
           done
 
+      - name: Patch VideoReceiver.pri to add -Bsymbolic for non-PIC arm64 GStreamer static libs
+        working-directory: ${{ github.workspace }}
+        run: |
+          sed -i 's/QMAKE_CXXFLAGS  += -pthread/QMAKE_CXXFLAGS  += -pthread\n        QMAKE_LFLAGS    += -Wl,-Bsymbolic/' \
+            src/VideoReceiver/VideoReceiver.pri
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:

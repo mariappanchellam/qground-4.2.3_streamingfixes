@@ -38,6 +38,17 @@ jobs:
         run: |
           git fetch --all --tags -f
 
+      - name: Patch gst-plugins-good volatile gsize for clang
+        working-directory: ${{ github.workspace }}
+        run: |
+          for f in \
+            libs/qmlglsink/gst-plugins-good/ext/qt/gstqtglutility.cc \
+            libs/qmlglsink/gst-plugins-good/ext/qt/gstqsgtexture.cc \
+            libs/qmlglsink/gst-plugins-good/ext/qt/qtwindow.cc \
+            libs/qmlglsink/gst-plugins-good/ext/qt/qtitem.cc; do
+            sed -i 's/static volatile gsize _debug/static gsize _debug/g' "$f"
+          done
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:

@@ -63,6 +63,7 @@ jobs:
           version:      ${{ env.QT_VERSION }}
           host:         linux
           target:       android
+          arch:         android_arm64_v8a
           dir:          ${{ runner.temp }}
           modules:      qtcharts
 

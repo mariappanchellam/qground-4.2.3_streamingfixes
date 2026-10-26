@@ -57,6 +57,7 @@ jobs:
           target:       android
           dir:          ${{ runner.temp }}
           modules:      qtcharts
+          mirror:       https://ftp.jaist.ac.jp/pub/qtproject
 
       - name: Install ccache
         run:  sudo apt-get install ccache

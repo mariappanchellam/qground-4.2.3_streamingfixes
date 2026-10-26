@@ -60,13 +60,22 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:
-          aqtversion:   '==3.1.0'
           version:      ${{ env.QT_VERSION }}
           host:         linux
           target:       android
-          arch:         android_arm64_v8a
           dir:          ${{ runner.temp }}
           modules:      qtcharts
+
+      - name: Install Qt android_arm64_v8a via aqt 2.x
+        run: |
+          # aqt 3.x fails to parse Qt 5.15.2 android_arm64_v8a package XML.
+          # aqt 2.x uses a different parser that handles the older Qt 5.15.2 package format.
+          pip install "aqtinstall==2.1.0" -q
+          python -m aqt install linux android ${{ env.QT_VERSION }} android_arm64_v8a \
+            -O "${{ runner.temp }}/Qt" \
+            -m qtcharts
+          # Prepend arm64 Qt bin to PATH so arm64 qmake is used (generates correct deployment JSON)
+          echo "${{ runner.temp }}/Qt/${{ env.QT_VERSION }}/android_arm64_v8a/bin" >> $GITHUB_PATH
 
       - name: Install ccache
         run:  sudo apt-get install ccache

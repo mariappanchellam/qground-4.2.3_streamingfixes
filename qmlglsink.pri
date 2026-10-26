@@ -1,5 +1,8 @@
 LinuxBuild {
     DEFINES += HAVE_QT_X11 HAVE_QT_EGLFS HAVE_QT_WAYLAND
+    INCLUDEPATH += $$[QT_INSTALL_HEADERS]/QtGui/$$QT_VERSION/QtGui
+    INCLUDEPATH += $$[QT_INSTALL_HEADERS]/QtCore/$$QT_VERSION/QtCore
+    QMAKE_CXXFLAGS += -Wno-volatile -Wno-error=volatile -fpermissive -Uglib_typeof
 } else:MacBuild {
     DEFINES += HAVE_QT_MAC
 } else:iOSBuild {

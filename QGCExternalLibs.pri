@@ -98,7 +98,8 @@ exists($$MAVLINKPATH/common) {
 #
 # [REQUIRED] EIGEN matrix library
 # NOMINMAX constant required to make internal min/max work.
-INCLUDEPATH += libs/eigen
+# Use -isystem so clang does not report warnings in Eigen headers.
+QMAKE_CXXFLAGS += -isystem $$PWD/libs/eigen
 DEFINES += NOMINMAX
 
 #

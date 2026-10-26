@@ -73,12 +73,30 @@ jobs:
       - name: Create build directory
         run:  mkdir ${{ runner.temp }}/shadow_build_dir
 
-      - name:               Install gstreamer
-        working-directory:  ${{ github.workspace }}
+      - name: Install gstreamer
+        working-directory: ${{ github.workspace }}
         run: |
-            wget --quiet https://gstreamer.freedesktop.org/data/pkg/android/1.18.5/gstreamer-1.0-android-universal-1.18.5.tar.xz
-            mkdir gstreamer-1.0-android-universal-1.18.5
-            tar xf gstreamer-1.0-android-universal-1.18.5.tar.xz -C gstreamer-1.0-android-universal-1.18.5
+          set -e
+          GSTREAMER_DIR="gstreamer-1.0-android-universal-1.18.5"
+          DOWNLOADED=0
+          for URL in \
+            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.12/gstreamer-1.0-android-universal-1.22.12.tar.xz" \
+            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.11/gstreamer-1.0-android-universal-1.22.11.tar.xz" \
+            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.10/gstreamer-1.0-android-universal-1.22.10.tar.xz" \
+            "https://gstreamer.freedesktop.org/data/pkg/android/1.18.6/gstreamer-1.0-android-universal-1.18.6.tar.xz" \
+            "https://gstreamer.freedesktop.org/data/pkg/android/1.18.5/gstreamer-1.0-android-universal-1.18.5.tar.xz"; do
+            echo "Trying $URL ..."
+            if wget --quiet --tries=2 --timeout=120 "$URL" -O gstreamer-android.tar.xz; then
+              echo "Downloaded from $URL"
+              DOWNLOADED=1
+              break
+            fi
+          done
+          if [ "$DOWNLOADED" -eq 0 ]; then
+            echo "ERROR: Could not download GStreamer from any URL" && exit 1
+          fi
+          mkdir "$GSTREAMER_DIR"
+          tar xf gstreamer-android.tar.xz -C "$GSTREAMER_DIR"
 
       - name: Git branch name
         run: |

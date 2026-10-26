@@ -138,6 +138,26 @@ jobs:
       - name: ccache post-run
         run:  ccache -s
 
+      - name: Locate and stage APK
+        run: |
+          echo "=== Searching for APKs ==="
+          find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null || echo "No APKs found in shadow_build_dir"
+          find ${{ github.workspace }} -name "*.apk" 2>/dev/null || echo "No APKs found in workspace"
+          echo "=== Listing package dir (if exists) ==="
+          ls -la ${{ runner.temp }}/shadow_build_dir/package/ 2>/dev/null || echo "package dir does not exist"
+          echo "=== Listing android-build outputs ==="
+          find ${{ runner.temp }}/shadow_build_dir -path "*/outputs/apk*" -type f 2>/dev/null || echo "No apk outputs found"
+          APK=$(find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null | head -1)
+          if [ -n "$APK" ]; then
+            echo "Found APK at: $APK"
+            mkdir -p ${{ runner.temp }}/shadow_build_dir/package
+            cp "$APK" ${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}
+            echo "Staged to ${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}"
+          else
+            echo "ERROR: No APK found anywhere after build"
+            exit 1
+          fi
+
       - name: Save artifact
         uses: actions/upload-artifact@v4
         with:

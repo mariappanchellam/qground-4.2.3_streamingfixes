@@ -102,6 +102,9 @@ jobs:
             sudo chmod 755 "$BIN/llvm-readobj"
           fi
           "$BIN/llvm-readobj" -needed-libs "$BIN/llvm-readobj.orig" | sed -n 1,12p
+          # AGP 3.6 strips native libs with <triple>-strip, which NDK r23+ replaced with llvm-strip.
+          [ -e "$BIN/aarch64-linux-android-strip" ] || sudo ln -s llvm-strip "$BIN/aarch64-linux-android-strip"
+          "$BIN/aarch64-linux-android-strip" --version | sed -n 1p
 
       # Qt 5.15.2's Gradle template only lists google() and jcenter(); add mavenCentral() as a fallback.
       - name: Add mavenCentral to Qt Gradle template

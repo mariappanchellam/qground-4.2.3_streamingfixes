@@ -153,21 +153,22 @@ jobs:
       - name: Create build directory
         run:  mkdir ${{ runner.temp }}/shadow_build_dir
 
-      - name: Restore GStreamer 1.18.5 download
+      - name: Restore GStreamer 1.18.6 download
         id: gst_restore
         uses: actions/cache/restore@v4
         with:
-          path: gstreamer-android-1.18.5.tar.xz
-          key:  gstreamer-1.0-android-universal-1.18.5
+          path: gstreamer-android-1.18.6.tar.xz
+          key:  gstreamer-1.0-android-universal-1.18.6
 
       # QGC 4.2.3 (VideoReceiver.pri, GStreamer.cc, android/src/org/freedesktop/gstreamer)
-      # targets GStreamer 1.18.5; do not fall back to another version.
-      - name: Install gstreamer 1.18.5
+      # targets the GStreamer 1.18 series. 1.18.5 is no longer on gstreamer.freedesktop.org
+      # (404), so use 1.18.6, unpacked into the 1.18.5 directory VideoReceiver.pri expects.
+      - name: Install gstreamer 1.18.6
         working-directory: ${{ github.workspace }}
         run: |
           set -e
-          TARBALL=gstreamer-android-1.18.5.tar.xz
-          URL=https://gstreamer.freedesktop.org/data/pkg/android/1.18.5/gstreamer-1.0-android-universal-1.18.5.tar.xz
+          TARBALL=gstreamer-android-1.18.6.tar.xz
+          URL=https://gstreamer.freedesktop.org/data/pkg/android/1.18.6/gstreamer-1.0-android-universal-1.18.6.tar.xz
           if [ ! -s "$TARBALL" ]; then
             for i in 1 2 3 4 5 6; do
               code=$(curl -sSL --connect-timeout 30 --max-time 1200 -o "$TARBALL.part" -w '%{http_code}' "$URL" || echo 000)
@@ -180,19 +181,19 @@ jobs:
               sleep $((i * 30))
             done
           fi
-          [ -s "$TARBALL" ] || { echo "ERROR: could not download GStreamer 1.18.5 from $URL"; exit 1; }
+          [ -s "$TARBALL" ] || { echo "ERROR: could not download GStreamer 1.18.6 from $URL"; exit 1; }
           mkdir -p gstreamer-1.0-android-universal-1.18.5
           tar xf "$TARBALL" -C gstreamer-1.0-android-universal-1.18.5
           VERSION_H=gstreamer-1.0-android-universal-1.18.5/arm64/include/gstreamer-1.0/gst/gstversion.h
           grep -E "define GST_VERSION_(MAJOR|MINOR|MICRO)" "$VERSION_H"
           grep -qE "define GST_VERSION_MINOR +\(?18\)?" "$VERSION_H" || { echo "ERROR: extracted GStreamer is not 1.18"; exit 1; }
 
-      - name: Save GStreamer 1.18.5 download
+      - name: Save GStreamer 1.18.6 download
         if: steps.gst_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: gstreamer-android-1.18.5.tar.xz
-          key:  gstreamer-1.0-android-universal-1.18.5
+          path: gstreamer-android-1.18.6.tar.xz
+          key:  gstreamer-1.0-android-universal-1.18.6
 
       - name: Git branch name
         run: |

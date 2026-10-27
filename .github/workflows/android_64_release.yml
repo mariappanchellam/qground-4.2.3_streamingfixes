@@ -73,9 +73,58 @@ jobs:
           echo "=== Qt arm64 platform plugins ==="
           find "$QT_DIR/plugins" -name "*qtforandroid*" 2>/dev/null || echo "WARNING: no qtforandroid plugins found"
           echo "=== Qt arm64 libs (first 20) ==="
-          find "$QT_DIR/lib" -name "*arm64*" 2>/dev/null | head -20 || echo "WARNING: no arm64 libs found"
+          find "$QT_DIR/lib" -name "*arm64*" 2>/dev/null | sed -n 1,20p
           echo "=== qmake path ==="
           which qmake && qmake --version
+
+      # Qt 5.15.2 androiddeployqt calls "llvm-readobj -needed-libs"; the LLVM in
+      # NDK r23+ only accepts "--needed-libs", so dependency scanning fails and
+      # androiddeployqt reports "No platform plugin". Wrap llvm-readobj to fix the flag.
+      - name: Patch NDK llvm-readobj for Qt 5.15 androiddeployqt
+        run: |
+          set -e
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
+          BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -e "$BIN/llvm-readobj.orig" ]; then
+            sudo cp -L "$BIN/llvm-readobj" "$BIN/llvm-readobj.orig"
+            sudo rm "$BIN/llvm-readobj"
+            sudo tee "$BIN/llvm-readobj" > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for a in "$@"; do
+            case "$a" in
+              -needed-libs) args+=("--needed-libs") ;;
+              *) args+=("$a") ;;
+            esac
+          done
+          exec -a "$(basename "$0")" "$(dirname "$(readlink -f "$0")")/llvm-readobj.orig" "${args[@]}"
+          EOF
+            sudo chmod 755 "$BIN/llvm-readobj"
+          fi
+          "$BIN/llvm-readobj" -needed-libs "$BIN/llvm-readobj.orig" | sed -n 1,12p
+
+      # Qt 5.15.2's Gradle template only lists google() and jcenter(); add mavenCentral() as a fallback.
+      - name: Add mavenCentral to Qt Gradle template
+        run: |
+          TEMPLATE="${{ runner.temp }}/Qt/${{ env.QT_VERSION }}/android/src/android/templates/build.gradle"
+          if ! grep -q mavenCentral "$TEMPLATE"; then
+            sed -i 's/^\(\s*\)jcenter()/\1mavenCentral()\n\1jcenter()/' "$TEMPLATE"
+          fi
+          grep -n "google()\|mavenCentral()\|jcenter()\|tools.build:gradle" "$TEMPLATE"
+
+      # Qt 5.15.2 Gradle template: AGP 3.6.0, Gradle 5.6.4, build-tools 28.0.3.
+      - name: Install Android SDK packages for Qt 5.15 packaging
+        run: |
+          (yes || true) | JAVA_HOME="${JAVA_HOME_17_X64:-$JAVA_HOME}" "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-30" "build-tools;28.0.3" > /dev/null
+          ls "$ANDROID_SDK_ROOT/platforms" "$ANDROID_SDK_ROOT/build-tools"
+
+      # Gradle 5.6.4 does not run on Java 17+.
+      - name: Setup Java 11 for Gradle 5.6.4
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
 
       - name: Install ccache
         run:  sudo apt-get install ccache
@@ -84,8 +133,8 @@ jobs:
         id: ccache_cache_timestamp
         run: echo "timestamp=$(date -u +'%Y-%m-%d-%H;%M;%S')" >> $GITHUB_OUTPUT
 
-      - name: ccache cache files
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path:         ~/.ccache
           key:          ${{ runner.os }}-ccache-${{steps.ccache_cache_timestamp.outputs.timestamp}}
@@ -145,14 +194,36 @@ jobs:
         run:  |
             qmake -r ${SOURCE_DIR}/qgroundcontrol.pro -spec android-clang CONFIG+=${BUILD_TYPE} CONFIG+=installer ANDROID_ABIS="arm64-v8a"
             make -j2
-            make apk
 
       - name: ccache post-run
+        if: always()
         run:  ccache -s
+
+      # Save even when a later step fails so the next run doesn't recompile everything.
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key:  ${{ runner.os }}-ccache-${{steps.ccache_cache_timestamp.outputs.timestamp}}
+
+      - name: Package APK
+        working-directory: ${{ runner.temp }}/shadow_build_dir
+        run: |
+          set -e
+          make apk_install_target
+          SETTINGS=$(ls android-*-deployment-settings.json | sed -n 1p)
+          echo "Deployment settings: $SETTINGS"
+          androiddeployqt --verbose \
+            --input "$SETTINGS" \
+            --output "$PWD/android-build" \
+            --apk "$PWD/android-build/QGroundControl.apk" \
+            --android-platform android-30
 
       - name: Locate and stage APK
         run: |
-          APK=$(find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null | head -1)
+          APK="${{ runner.temp }}/shadow_build_dir/android-build/QGroundControl.apk"
+          [ -f "$APK" ] || APK=$(find ${{ runner.temp }}/shadow_build_dir -name "*.apk" 2>/dev/null | head -1)
           if [ -n "$APK" ]; then
             echo "Found APK at: $APK"
             mkdir -p ${{ runner.temp }}/shadow_build_dir/package

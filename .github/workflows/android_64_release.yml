@@ -49,12 +49,10 @@ jobs:
             sed -i 's/static volatile gsize/static gsize/g' "$f"
           done
 
-      - name: Patch VideoReceiver.pri to add -Bsymbolic and -lpcre2-8 for arm64 GStreamer
+      - name: Patch VideoReceiver.pri to add -Bsymbolic for arm64 GStreamer
         working-directory: ${{ github.workspace }}
         run: |
           sed -i 's/QMAKE_CXXFLAGS  += -pthread/QMAKE_CXXFLAGS  += -pthread\n        QMAKE_LFLAGS    += -Wl,-Bsymbolic/' \
-            src/VideoReceiver/VideoReceiver.pri
-          sed -i 's/-lglib-2.0 -lorc-0.4/-lglib-2.0 -lpcre2-8 -lorc-0.4/' \
             src/VideoReceiver/VideoReceiver.pri
 
       - name: Install Qt (multi-ABI android)
@@ -155,30 +153,46 @@ jobs:
       - name: Create build directory
         run:  mkdir ${{ runner.temp }}/shadow_build_dir
 
-      - name: Install gstreamer
+      - name: Restore GStreamer 1.18.5 download
+        id: gst_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: gstreamer-android-1.18.5.tar.xz
+          key:  gstreamer-1.0-android-universal-1.18.5
+
+      # QGC 4.2.3 (VideoReceiver.pri, GStreamer.cc, android/src/org/freedesktop/gstreamer)
+      # targets GStreamer 1.18.5; do not fall back to another version.
+      - name: Install gstreamer 1.18.5
         working-directory: ${{ github.workspace }}
         run: |
           set -e
-          GSTREAMER_DIR="gstreamer-1.0-android-universal-1.18.5"
-          DOWNLOADED=0
-          for URL in \
-            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.12/gstreamer-1.0-android-universal-1.22.12.tar.xz" \
-            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.11/gstreamer-1.0-android-universal-1.22.11.tar.xz" \
-            "https://gstreamer.freedesktop.org/data/pkg/android/1.22.10/gstreamer-1.0-android-universal-1.22.10.tar.xz" \
-            "https://gstreamer.freedesktop.org/data/pkg/android/1.18.6/gstreamer-1.0-android-universal-1.18.6.tar.xz" \
-            "https://gstreamer.freedesktop.org/data/pkg/android/1.18.5/gstreamer-1.0-android-universal-1.18.5.tar.xz"; do
-            echo "Trying $URL ..."
-            if wget --quiet --tries=2 --timeout=120 "$URL" -O gstreamer-android.tar.xz; then
-              echo "Downloaded from $URL"
-              DOWNLOADED=1
-              break
-            fi
-          done
-          if [ "$DOWNLOADED" -eq 0 ]; then
-            echo "ERROR: Could not download GStreamer from any URL" && exit 1
+          TARBALL=gstreamer-android-1.18.5.tar.xz
+          URL=https://gstreamer.freedesktop.org/data/pkg/android/1.18.5/gstreamer-1.0-android-universal-1.18.5.tar.xz
+          if [ ! -s "$TARBALL" ]; then
+            for i in 1 2 3 4 5 6; do
+              code=$(curl -sSL --connect-timeout 30 --max-time 1200 -o "$TARBALL.part" -w '%{http_code}' "$URL" || echo 000)
+              echo "Attempt $i: HTTP $code"
+              if [ "$code" = 200 ] && [ -s "$TARBALL.part" ]; then
+                mv "$TARBALL.part" "$TARBALL"
+                break
+              fi
+              rm -f "$TARBALL.part"
+              sleep $((i * 30))
+            done
           fi
-          mkdir "$GSTREAMER_DIR"
-          tar xf gstreamer-android.tar.xz -C "$GSTREAMER_DIR"
+          [ -s "$TARBALL" ] || { echo "ERROR: could not download GStreamer 1.18.5 from $URL"; exit 1; }
+          mkdir -p gstreamer-1.0-android-universal-1.18.5
+          tar xf "$TARBALL" -C gstreamer-1.0-android-universal-1.18.5
+          VERSION_H=gstreamer-1.0-android-universal-1.18.5/arm64/include/gstreamer-1.0/gst/gstversion.h
+          grep -E "define GST_VERSION_(MAJOR|MINOR|MICRO)" "$VERSION_H"
+          grep -qE "define GST_VERSION_MINOR +\(?18\)?" "$VERSION_H" || { echo "ERROR: extracted GStreamer is not 1.18"; exit 1; }
+
+      - name: Save GStreamer 1.18.5 download
+        if: steps.gst_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: gstreamer-android-1.18.5.tar.xz
+          key:  gstreamer-1.0-android-universal-1.18.5
 
       - name: Git branch name
         run: |

@@ -276,8 +276,8 @@ Rectangle {
         QGCButton {
             Layout.alignment:   Qt.AlignHCenter
             text:               _videoStreamManager.liveStreamEnabled ? qsTr("Stop Live") : qsTr("Go Live")
+            // Enabled even before frames arrive: VideoManager attaches the stream once video starts
             visible:            _anyVideoStreamAvailable
-            enabled:            _videoStreamManager.liveStreamEnabled || _videoStreamIsStreaming
             onClicked: {
                 if (_videoStreamManager.liveStreamEnabled) {
                     _videoStreamManager.stopLiveStream()

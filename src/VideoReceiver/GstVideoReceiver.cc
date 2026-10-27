@@ -31,7 +31,13 @@ QGC_LOGGING_CATEGORY(VideoReceiverLog, "VideoReceiverLog")
 // _source-->_tee
 //              |
 //              +-->queue-->_recorderValve[-->_fileSink]
+//              |
+//              +-->_liveStreamValve[-->_liveStreamSink]
 //
+// _liveStreamSink is a bin: leaky queue-->h264parse-->flvmux-->rtmp2sink. The queue lives inside the
+// bin so every live session starts with a fresh queue, and being leaky it never stalls the local video.
+
+static const char* kLiveStreamBinName = "livestreambin";
 
 GstVideoReceiver::GstVideoReceiver(QObject* parent)
     : VideoReceiver(parent)
@@ -48,6 +54,11 @@ GstVideoReceiver::GstVideoReceiver(QObject* parent)
     , _videoSink(nullptr)
     , _fileSink(nullptr)
     , _pipeline(nullptr)
+    , _liveStreaming(false)
+    , _removingLiveStream(false)
+    , _liveStreamStopTime(0)
+    , _liveStreamValve(nullptr)
+    , _liveStreamSink(nullptr)
     , _lastSourceFrameTime(0)
     , _lastVideoFrameTime(0)
     , _resetVideoSink(true)
@@ -150,6 +161,13 @@ GstVideoReceiver::start(const QString& uri, unsigned timeout, int buffer)
 
         g_object_set(_recorderValve, "drop", TRUE, nullptr);
 
+        if((_liveStreamValve = gst_element_factory_make("valve", nullptr)) == nullptr)  {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('valve') failed";
+            break;
+        }
+
+        g_object_set(_liveStreamValve, "drop", TRUE, nullptr);
+
         if ((_pipeline = gst_pipeline_new("receiver")) == nullptr) {
             qCCritical(VideoReceiverLog) << "gst_pipeline_new() failed";
             break;
@@ -162,7 +180,7 @@ GstVideoReceiver::start(const QString& uri, unsigned timeout, int buffer)
             break;
         }
 
-        gst_bin_add_many(GST_BIN(_pipeline), _source, _tee, decoderQueue, _decoderValve, recorderQueue, _recorderValve, nullptr);
+        gst_bin_add_many(GST_BIN(_pipeline), _source, _tee, decoderQueue, _decoderValve, recorderQueue, _recorderValve, _liveStreamValve, nullptr);
 
         pipelineUp = true;
 
@@ -201,6 +219,11 @@ GstVideoReceiver::start(const QString& uri, unsigned timeout, int buffer)
             break;
         }
 
+        if(!gst_element_link(_tee, _liveStreamValve)) {
+            qCCritical(VideoReceiverLog) << "Unable to link live stream valve";
+            break;
+        }
+
         GstBus* bus = nullptr;
 
         if ((bus = gst_pipeline_get_bus(GST_PIPELINE(_pipeline))) != nullptr) {
@@ -226,6 +249,11 @@ GstVideoReceiver::start(const QString& uri, unsigned timeout, int buffer)
 
         // If we failed before adding items to the pipeline, then clean up
         if (!pipelineUp) {
+            if (_liveStreamValve != nullptr) {
+                gst_object_unref(_liveStreamValve);
+                _liveStreamValve = nullptr;
+            }
+
             if (_recorderValve != nullptr) {
                 gst_object_unref(_recorderValve);
                 _recorderValve = nullptr;
@@ -288,6 +316,9 @@ GstVideoReceiver::stop(void)
     qCDebug(VideoReceiverLog) << "Stopping" << _uri;
 
     if (_pipeline != nullptr) {
+        // Detach the live stream first: the EOS wait below would block forever on an RTMP sink that cannot flush
+        _shutdownLiveStreamBranch();
+
         GstBus* bus;
 
         if ((bus = gst_pipeline_get_bus(GST_PIPELINE(_pipeline))) != nullptr) {
@@ -340,6 +371,7 @@ GstVideoReceiver::stop(void)
         gst_object_unref(_pipeline);
         _pipeline = nullptr;
 
+        _liveStreamValve = nullptr;
         _recorderValve = nullptr;
         _decoderValve = nullptr;
         _tee = nullptr;
@@ -602,6 +634,110 @@ GstVideoReceiver::stopRecording(void)
 }
 
 void
+GstVideoReceiver::startLiveStream(const QString& url)
+{
+    if (_needDispatch()) {
+        QString cachedUrl = url;
+        _slotHandler.dispatch([this, cachedUrl]() {
+            startLiveStream(cachedUrl);
+        });
+        return;
+    }
+
+    // The URL carries the stream key, so only the host is logged
+    qCDebug(VideoReceiverLog) << "Starting live stream to" << QUrl(url).host() << _uri;
+
+    if (_pipeline == nullptr || _liveStreamValve == nullptr) {
+        _dispatchSignal([this](){
+            emit liveStreamError(tr("Video stream is not running"));
+        });
+        return;
+    }
+
+    if (url.isEmpty()) {
+        _dispatchSignal([this](){
+            emit liveStreamError(tr("RTMP URL is not set"));
+        });
+        return;
+    }
+
+    if (_liveStreamSink != nullptr) {
+        if (!_removingLiveStream) {
+            qCDebug(VideoReceiverLog) << "Already live streaming" << _uri;
+            return;
+        }
+        _shutdownLiveStreamBranch();
+    }
+
+    if ((_liveStreamSink = _makeLiveStreamSink(url)) == nullptr) {
+        _dispatchSignal([this](){
+            emit liveStreamError(tr("Unable to create the RTMP streaming pipeline"));
+        });
+        return;
+    }
+
+    gst_object_ref(_liveStreamSink);
+    gst_bin_add(GST_BIN(_pipeline), _liveStreamSink);
+
+    if (!gst_element_link(_liveStreamValve, _liveStreamSink)) {
+        qCCritical(VideoReceiverLog) << "Failed to link live stream valve" << _uri;
+        _shutdownLiveStreamBranch();
+        _dispatchSignal([this](){
+            emit liveStreamError(tr("Unable to connect the video stream to the RTMP pipeline"));
+        });
+        return;
+    }
+
+    gst_element_sync_state_with_parent(_liveStreamSink);
+
+    GstPad* probepad;
+
+    if ((probepad = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
+        gst_pad_add_probe(probepad, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamKeyframeWatch, this, nullptr);
+        gst_object_unref(probepad);
+        probepad = nullptr;
+    }
+
+    GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-with-livestream");
+
+    _removingLiveStream = false;
+    g_object_set(_liveStreamValve, "drop", FALSE, nullptr);
+
+    _liveStreaming = true;
+    qCDebug(VideoReceiverLog) << "Live stream started" << _uri;
+    _dispatchSignal([this](){
+        emit liveStreamingChanged(_liveStreaming);
+    });
+}
+
+void
+GstVideoReceiver::stopLiveStream(void)
+{
+    if (_needDispatch()) {
+        _slotHandler.dispatch([this]() {
+            stopLiveStream();
+        });
+        return;
+    }
+
+    qCDebug(VideoReceiverLog) << "Stopping live stream" << _uri;
+
+    if (_pipeline == nullptr || _liveStreamSink == nullptr || _removingLiveStream) {
+        return;
+    }
+
+    g_object_set(_liveStreamValve, "drop", TRUE, nullptr);
+
+    _removingLiveStream = true;
+    _liveStreamStopTime = QDateTime::currentSecsSinceEpoch();
+
+    // Send EOS so flvmux/rtmp2sink close the RTMP session cleanly; _watchdog() forces removal if that stalls
+    if (!_unlinkBranch(_liveStreamValve)) {
+        _shutdownLiveStreamBranch();
+    }
+}
+
+void
 GstVideoReceiver::takeScreenshot(const QString& imageFile)
 {
     if (_needDispatch()) {
@@ -633,6 +769,11 @@ GstVideoReceiver::_watchdog(void)
         }
 
         const qint64 now = QDateTime::currentSecsSinceEpoch();
+
+        if (_removingLiveStream && now - _liveStreamStopTime > 3) {
+            qCDebug(VideoReceiverLog) << "Live stream did not finish after EOS, removing it" << _uri;
+            _shutdownLiveStreamBranch();
+        }
 
         if (_lastSourceFrameTime == 0) {
             _lastSourceFrameTime = now;
@@ -945,6 +1086,102 @@ GstVideoReceiver::_makeFileSink(const QString& videoFile, FILE_FORMAT format)
     }
 
     return fileSink;
+}
+
+GstElement*
+GstVideoReceiver::_makeLiveStreamSink(const QString& url)
+{
+    GstElement* liveSink = nullptr;
+    GstElement* queue = nullptr;
+    GstElement* parser = nullptr;
+    GstElement* mux = nullptr;
+    GstElement* sink = nullptr;
+    GstElement* bin = nullptr;
+    bool releaseElements = true;
+
+    do {
+        if ((queue = gst_element_factory_make("queue", nullptr)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('queue') failed";
+            break;
+        }
+
+        if ((parser = gst_element_factory_make("h264parse", nullptr)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('h264parse') failed";
+            break;
+        }
+
+        if ((mux = gst_element_factory_make("flvmux", nullptr)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('flvmux') failed";
+            break;
+        }
+
+        if ((sink = gst_element_factory_make("rtmp2sink", nullptr)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('rtmp2sink') failed";
+            break;
+        }
+
+        // Leaky (downstream) so a slow uplink drops old frames instead of blocking the tee and the local video
+        g_object_set(static_cast<gpointer>(queue),
+                     "leaky",            2,
+                     "max-size-buffers", 0u,
+                     "max-size-bytes",   0u,
+                     "max-size-time",    static_cast<guint64>(3 * GST_SECOND),
+                     nullptr);
+        g_object_set(static_cast<gpointer>(parser), "config-interval", -1, nullptr);
+        g_object_set(static_cast<gpointer>(mux), "streamable", TRUE, nullptr);
+        // async=false: a sink added to an already PLAYING pipeline otherwise stays parked in preroll (PAUSED).
+        // sync=false: the camera stream is already live-paced, forward it as soon as it arrives.
+        g_object_set(static_cast<gpointer>(sink), "location", qPrintable(url), "async", FALSE, "sync", FALSE, nullptr);
+
+        if ((bin = gst_bin_new(kLiveStreamBinName)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_bin_new('livestreambin') failed";
+            break;
+        }
+
+        gst_bin_add_many(GST_BIN(bin), queue, parser, mux, sink, nullptr);
+
+        releaseElements = false;
+
+        if (!gst_element_link_many(queue, parser, mux, sink, nullptr)) {
+            qCCritical(VideoReceiverLog) << "Unable to link live stream elements";
+            break;
+        }
+
+        GstPad* pad;
+
+        if ((pad = gst_element_get_static_pad(queue, "sink")) == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_get_static_pad(queue) failed";
+            break;
+        }
+
+        GstPad* ghostpad = gst_ghost_pad_new("sink", pad);
+
+        gst_object_unref(pad);
+        pad = nullptr;
+
+        if (ghostpad == nullptr || !gst_element_add_pad(bin, ghostpad)) {
+            qCCritical(VideoReceiverLog) << "Unable to add live stream ghost pad";
+            break;
+        }
+
+        liveSink = bin;
+        bin = nullptr;
+    } while(0);
+
+    if (releaseElements) {
+        for (GstElement* element : { sink, mux, parser, queue }) {
+            if (element != nullptr) {
+                gst_object_unref(element);
+            }
+        }
+    }
+
+    if (bin != nullptr) {
+        gst_object_unref(bin);
+        bin = nullptr;
+    }
+
+    return liveSink;
 }
 
 void
@@ -1267,6 +1504,68 @@ GstVideoReceiver::_shutdownRecordingBranch(void)
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-recording-stopped");
 }
 
+void
+GstVideoReceiver::_shutdownLiveStreamBranch(void)
+{
+    if (_liveStreamSink == nullptr) {
+        return;
+    }
+
+    if (_liveStreamValve != nullptr) {
+        g_object_set(_liveStreamValve, "drop", TRUE, nullptr);
+
+        GstPad* src;
+
+        if ((src = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
+            GstPad* peer;
+
+            if ((peer = gst_pad_get_peer(src)) != nullptr) {
+                gst_pad_unlink(src, peer);
+                gst_object_unref(peer);
+                peer = nullptr;
+            }
+
+            gst_object_unref(src);
+            src = nullptr;
+        }
+    }
+
+    if (_pipeline != nullptr) {
+        gst_bin_remove(GST_BIN(_pipeline), _liveStreamSink);
+    }
+
+    gst_element_set_state(_liveStreamSink, GST_STATE_NULL);
+    gst_object_unref(_liveStreamSink);
+    _liveStreamSink = nullptr;
+
+    _removingLiveStream = false;
+
+    if (_liveStreaming) {
+        _liveStreaming = false;
+        qCDebug(VideoReceiverLog) << "Live stream stopped" << _uri;
+        _dispatchSignal([this](){
+            emit liveStreamingChanged(_liveStreaming);
+        });
+    }
+}
+
+void
+GstVideoReceiver::_onLiveStreamError(const QString& message)
+{
+    qCWarning(VideoReceiverLog) << "Live stream error:" << message << _uri;
+
+    // One failure is typically reported by several elements (sink, then queue); report it once
+    if (_liveStreamSink == nullptr) {
+        return;
+    }
+
+    _shutdownLiveStreamBranch();
+
+    _dispatchSignal([this, message](){
+        emit liveStreamError(message);
+    });
+}
+
 bool
 GstVideoReceiver::_needDispatch(void)
 {
@@ -1301,10 +1600,25 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
                 debug = nullptr;
             }
 
+            QString errorText;
+
             if (error != nullptr) {
                 qCCritical(VideoReceiverLog) << "GStreamer error:" << error->message;
+                errorText = QString::fromUtf8(error->message);
                 g_error_free(error);
                 error = nullptr;
+            }
+
+            // A failing RTMP upload must only end the live stream, not the local video
+            if (_isInLiveStreamBin(GST_MESSAGE_SRC(msg))) {
+                // Close the valve right away (this is the erroring thread) so the flow error cannot reach the tee
+                if (pThis->_liveStreamValve != nullptr) {
+                    g_object_set(pThis->_liveStreamValve, "drop", TRUE, nullptr);
+                }
+                pThis->_slotHandler.dispatch([pThis, errorText](){
+                    pThis->_onLiveStreamError(errorText);
+                });
+                break;
             }
 
             pThis->_slotHandler.dispatch([pThis](){
@@ -1336,10 +1650,19 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
             }
 
             if (GST_MESSAGE_TYPE(forward_msg) == GST_MESSAGE_EOS) {
-                pThis->_slotHandler.dispatch([pThis](){
-                    qCDebug(VideoReceiverLog) << "Received branch EOS";
-                    pThis->_handleEOS();
-                });
+                if (_isInLiveStreamBin(GST_MESSAGE_SRC(forward_msg))) {
+                    pThis->_slotHandler.dispatch([pThis](){
+                        qCDebug(VideoReceiverLog) << "Received live stream branch EOS";
+                        if (pThis->_removingLiveStream) {
+                            pThis->_shutdownLiveStreamBranch();
+                        }
+                    });
+                } else {
+                    pThis->_slotHandler.dispatch([pThis](){
+                        qCDebug(VideoReceiverLog) << "Received branch EOS";
+                        pThis->_handleEOS();
+                    });
+                }
             }
 
             gst_message_unref(forward_msg);
@@ -1545,4 +1868,51 @@ GstVideoReceiver::_keyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer us
     });
 
     return GST_PAD_PROBE_REMOVE;
+}
+
+GstPadProbeReturn
+GstVideoReceiver::_liveStreamKeyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data)
+{
+    Q_UNUSED(user_data)
+
+    if (info == nullptr) {
+        return GST_PAD_PROBE_DROP;
+    }
+
+    GstBuffer* buf = gst_pad_probe_info_get_buffer(info);
+
+    // RTMP viewers can only start decoding at a keyframe
+    if (buf == nullptr || GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT)) {
+        return GST_PAD_PROBE_DROP;
+    }
+
+    // Start the FLV timeline at zero
+    gst_pad_set_offset(pad, -static_cast<gint64>(buf->pts));
+
+    qCDebug(VideoReceiverLog) << "Live stream got keyframe, sending video";
+
+    return GST_PAD_PROBE_REMOVE;
+}
+
+bool
+GstVideoReceiver::_isInLiveStreamBin(GstObject* object)
+{
+    GstObject* current = object != nullptr ? GST_OBJECT(gst_object_ref(object)) : nullptr;
+
+    while (current != nullptr) {
+        gchar* name = gst_object_get_name(current);
+        const bool match = g_strcmp0(name, kLiveStreamBinName) == 0;
+        g_free(name);
+
+        if (match) {
+            gst_object_unref(current);
+            return true;
+        }
+
+        GstObject* parent = gst_object_get_parent(current);
+        gst_object_unref(current);
+        current = parent;
+    }
+
+    return false;
 }

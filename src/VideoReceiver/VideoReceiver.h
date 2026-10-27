@@ -53,6 +53,8 @@ signals:
     void decodingChanged(bool active);
     void recordingChanged(bool active);
     void recordingStarted(void);
+    void liveStreamingChanged(bool active);
+    void liveStreamError(const QString& message);
     void videoSizeChanged(QSize size);
 
     void onStartComplete(STATUS status);
@@ -74,5 +76,8 @@ public slots:
     virtual void stopDecoding(void) = 0;
     virtual void startRecording(const QString& videoFile, FILE_FORMAT format) = 0;
     virtual void stopRecording(void) = 0;
+    // Forwards the received H.264 stream, without re-encoding, to an RTMP server (url includes the stream key)
+    virtual void startLiveStream(const QString& url) = 0;
+    virtual void stopLiveStream(void) = 0;
     virtual void takeScreenshot(const QString& imageFile) = 0;
 };

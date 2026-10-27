@@ -55,6 +55,9 @@ public:
     Q_PROPERTY(bool             decoding                READ    decoding                                    NOTIFY decodingChanged)
     Q_PROPERTY(bool             recording               READ    recording                                   NOTIFY recordingChanged)
     Q_PROPERTY(QSize            videoSize               READ    videoSize                                   NOTIFY videoSizeChanged)
+    Q_PROPERTY(bool             liveStreamEnabled       READ    liveStreamEnabled                           NOTIFY liveStreamChanged)
+    Q_PROPERTY(bool             liveStreaming           READ    liveStreaming                               NOTIFY liveStreamChanged)
+    Q_PROPERTY(QString          liveStreamStatus        READ    liveStreamStatus                            NOTIFY liveStreamChanged)
 
     virtual bool        hasVideo            ();
     virtual bool        isGStreamer         ();
@@ -86,6 +89,10 @@ public:
         return QSize((size >> 16) & 0xFFFF, size & 0xFFFF);
     }
 
+    bool    liveStreamEnabled   (void) { return _liveStreamEnabled; }
+    bool    liveStreaming       (void) { return _liveStreaming; }
+    QString liveStreamStatus    (void) { return _liveStreamStatus; }
+
 // FIXME: AV: they should be removed after finishing multiple video stream support
 // new arcitecture does not assume direct access to video receiver from QML side, even if it works for now
     virtual VideoReceiver*  videoReceiver           () { return _videoReceiver[0]; }
@@ -111,6 +118,10 @@ public:
 
     Q_INVOKABLE void grabImage(const QString& imageFile = QString());
 
+    // Forward the video to the RTMP server set in VideoSettings::rtmpUrl, retrying until stopped
+    Q_INVOKABLE void startLiveStream();
+    Q_INVOKABLE void stopLiveStream ();
+
 signals:
     void hasVideoChanged            ();
     void isGStreamerChanged         ();
@@ -126,6 +137,7 @@ signals:
     void recordingChanged           ();
     void recordingStarted           ();
     void videoSizeChanged           ();
+    void liveStreamChanged          ();
 
 protected slots:
     void _videoSourceChanged        ();
@@ -149,6 +161,8 @@ protected:
     void _restartVideo              (unsigned id);
     void _startReceiver             (unsigned id);
     void _stopReceiver              (unsigned id);
+    void _startLiveStreamOnReceiver ();
+    void _updateLiveStreamStatus    ();
 
 protected:
     QString                 _videoFile;
@@ -173,6 +187,11 @@ protected:
     QString                 _videoSourceID;
     bool                    _fullScreen             = false;
     Vehicle*                _activeVehicle          = nullptr;
+    bool                    _liveStreamEnabled      = false;
+    bool                    _liveStreaming          = false;
+    QString                 _liveStreamStatus;
+    QString                 _liveStreamLastError;
+    QTimer                  _liveStreamRetryTimer;
 };
 
 #endif

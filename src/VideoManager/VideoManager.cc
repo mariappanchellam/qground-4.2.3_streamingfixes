@@ -132,6 +132,8 @@ VideoManager::setToolbox(QGCToolbox *toolbox)
                 // NOTE that even if decoder did not start it is still possible to record video
                 _videoReceiver[0]->startDecoding(_videoSink[0]);
             }
+            // The pipeline is rebuilt on every (re)start, so re-attach the live stream if it is on
+            _startLiveStreamOnReceiver();
         } else if (status == VideoReceiver::STATUS_INVALID_URL) {
             // Invalid URL - don't restart
         } else if (status == VideoReceiver::STATUS_INVALID_STATE) {
@@ -166,6 +168,28 @@ VideoManager::setToolbox(QGCToolbox *toolbox)
     connect(_videoReceiver[0], &VideoReceiver::videoSizeChanged, this, [this](QSize size){
         _videoSize = ((quint32)size.width() << 16) | (quint32)size.height();
         emit videoSizeChanged();
+    });
+
+    _liveStreamRetryTimer.setSingleShot(true);
+    _liveStreamRetryTimer.setInterval(5000);
+    connect(&_liveStreamRetryTimer, &QTimer::timeout, this, &VideoManager::_startLiveStreamOnReceiver);
+
+    connect(_videoReceiver[0], &VideoReceiver::liveStreamingChanged, this, [this](bool active){
+        _liveStreaming = active;
+        _updateLiveStreamStatus();
+    });
+
+    connect(_videoReceiver[0], &VideoReceiver::liveStreamError, this, [this](const QString& message){
+        if (!_liveStreamEnabled) {
+            return;
+        }
+        // Show the first failure only; retries keep failing silently while the status label shows the reason
+        if (_liveStreamLastError.isEmpty()) {
+            qgcApp()->showAppMessage(tr("Live stream error: %1. Retrying every 5 seconds until you press Stop Live.").arg(message));
+        }
+        _liveStreamLastError = message;
+        _liveStreamRetryTimer.start();
+        _updateLiveStreamStatus();
     });
 
     //connect(_videoReceiver, &VideoReceiver::onTakeScreenshotComplete, this, [this](VideoReceiver::STATUS status){
@@ -340,6 +364,84 @@ VideoManager::stopRecording()
         }
     }
 #endif
+}
+
+void
+VideoManager::startLiveStream()
+{
+    if (qgcApp()->runningUnitTests()) {
+        return;
+    }
+#if defined(QGC_GST_STREAMING)
+    const QString url = _videoSettings->rtmpUrl()->rawValue().toString().trimmed();
+
+    if (url.isEmpty()) {
+        qgcApp()->showAppMessage(tr("Set the Live Stream RTMP URL in Application Settings > General > Video first."));
+        return;
+    }
+
+    if (!url.startsWith(QStringLiteral("rtmp://"), Qt::CaseInsensitive) && !url.startsWith(QStringLiteral("rtmps://"), Qt::CaseInsensitive)) {
+        qgcApp()->showAppMessage(tr("The Live Stream URL must start with rtmp:// (for example rtmp://a.rtmp.youtube.com/live2/your-stream-key)."));
+        return;
+    }
+
+    _liveStreamEnabled = true;
+    _liveStreamLastError.clear();
+    _updateLiveStreamStatus();
+    _startLiveStreamOnReceiver();
+#endif
+}
+
+void
+VideoManager::stopLiveStream()
+{
+    if (qgcApp()->runningUnitTests()) {
+        return;
+    }
+#if defined(QGC_GST_STREAMING)
+    _liveStreamEnabled = false;
+    _liveStreamRetryTimer.stop();
+    _liveStreamLastError.clear();
+
+    if (_videoReceiver[0]) {
+        _videoReceiver[0]->stopLiveStream();
+    }
+
+    _updateLiveStreamStatus();
+#endif
+}
+
+void
+VideoManager::_startLiveStreamOnReceiver()
+{
+#if defined(QGC_GST_STREAMING)
+    if (!_liveStreamEnabled || !_videoReceiver[0] || !_videoStarted[0]) {
+        return;
+    }
+
+    _videoReceiver[0]->startLiveStream(_videoSettings->rtmpUrl()->rawValue().toString().trimmed());
+#endif
+}
+
+void
+VideoManager::_updateLiveStreamStatus()
+{
+    QString status;
+
+    if (_liveStreamEnabled) {
+        if (_liveStreaming) {
+            status = tr("LIVE");
+        } else if (!_liveStreamLastError.isEmpty()) {
+            status = tr("Reconnecting: %1").arg(_liveStreamLastError);
+        } else if (!_videoStarted[0]) {
+            status = tr("Waiting for video");
+        } else {
+            status = tr("Connecting...");
+        }
+    }
+
+    _liveStreamStatus = status;
+    emit liveStreamChanged();
 }
 
 void

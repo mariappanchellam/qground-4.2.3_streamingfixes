@@ -282,6 +282,18 @@ Rectangle {
                                 }
 
                                 QGCLabel {
+                                    id:         rtmpUrlLabel
+                                    text:       qsTr("Live Stream RTMP URL")
+                                    visible:    _isGst && _videoSettings.rtmpUrl.visible
+                                }
+                                FactTextField {
+                                    Layout.preferredWidth:  _comboFieldWidth
+                                    fact:                   _videoSettings.rtmpUrl
+                                    visible:                rtmpUrlLabel.visible
+                                    placeholderText:        "rtmp://a.rtmp.youtube.com/live2/stream-key"
+                                }
+
+                                QGCLabel {
                                     text:                   qsTr("Aspect Ratio")
                                     visible:                !_videoAutoStreamConfig && _isGst && _videoSettings.aspectRatio.visible
                                 }

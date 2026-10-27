@@ -95,6 +95,8 @@ public slots:
     virtual void stopDecoding(void);
     virtual void startRecording(const QString& videoFile, FILE_FORMAT format);
     virtual void stopRecording(void);
+    virtual void startLiveStream(const QString& url);
+    virtual void stopLiveStream(void);
     virtual void takeScreenshot(const QString& imageFile);
 
 protected slots:
@@ -105,6 +107,7 @@ protected:
     virtual GstElement* _makeSource(const QString& uri);
     virtual GstElement* _makeDecoder(GstCaps* caps = nullptr, GstElement* videoSink = nullptr);
     virtual GstElement* _makeFileSink(const QString& videoFile, FILE_FORMAT format);
+    virtual GstElement* _makeLiveStreamSink(const QString& url);
 
     virtual void _onNewSourcePad(GstPad* pad);
     virtual void _onNewDecoderPad(GstPad* pad);
@@ -116,6 +119,8 @@ protected:
     virtual bool _unlinkBranch(GstElement* from);
     virtual void _shutdownDecodingBranch (void);
     virtual void _shutdownRecordingBranch(void);
+    virtual void _shutdownLiveStreamBranch(void);
+    virtual void _onLiveStreamError(const QString& message);
 
     bool _needDispatch(void);
     void _dispatchSignal(std::function<void()> emitter);
@@ -129,6 +134,8 @@ protected:
     static GstPadProbeReturn _videoSinkProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _eosProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _keyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
+    static GstPadProbeReturn _liveStreamKeyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
+    static bool _isInLiveStreamBin(GstObject* object);
 
     bool                _streaming;
     bool                _decoding;
@@ -143,6 +150,12 @@ protected:
     GstElement*         _videoSink;
     GstElement*         _fileSink;
     GstElement*         _pipeline;
+
+    bool                _liveStreaming;
+    bool                _removingLiveStream;
+    qint64              _liveStreamStopTime;
+    GstElement*         _liveStreamValve;
+    GstElement*         _liveStreamSink;
 
     qint64              _lastSourceFrameTime;
     qint64              _lastVideoFrameTime;

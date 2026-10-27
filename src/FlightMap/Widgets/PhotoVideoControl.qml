@@ -272,6 +272,32 @@ Rectangle {
             }
         }
 
+        // Live stream (RTMP) controls for the received video stream
+        QGCButton {
+            Layout.alignment:   Qt.AlignHCenter
+            text:               _videoStreamManager.liveStreamEnabled ? qsTr("Stop Live") : qsTr("Go Live")
+            visible:            _anyVideoStreamAvailable
+            enabled:            _videoStreamManager.liveStreamEnabled || _videoStreamIsStreaming
+            onClicked: {
+                if (_videoStreamManager.liveStreamEnabled) {
+                    _videoStreamManager.stopLiveStream()
+                } else {
+                    _videoStreamManager.startLiveStream()
+                }
+            }
+        }
+        QGCLabel {
+            Layout.alignment:       Qt.AlignHCenter
+            Layout.maximumWidth:    ScreenTools.defaultFontPixelWidth * 20
+            horizontalAlignment:    Text.AlignHCenter
+            wrapMode:               Text.WordWrap
+            text:                   _videoStreamManager.liveStreamStatus
+            color:                  _videoStreamManager.liveStreaming ? qgcPal.colorRed : qgcPal.text
+            font.bold:              _videoStreamManager.liveStreaming
+            font.pointSize:         ScreenTools.smallFontPointSize
+            visible:                _anyVideoStreamAvailable && _videoStreamManager.liveStreamEnabled
+        }
+
         //-- Status Information
         ColumnLayout {
             Layout.alignment:   Qt.AlignHCenter

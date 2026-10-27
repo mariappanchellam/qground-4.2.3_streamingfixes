@@ -26,6 +26,13 @@
     "default":     ""
 },
 {
+    "name":             "rtmpUrl",
+    "shortDesc": "Live Stream RTMP URL",
+    "longDesc":  "RTMP server URL, including the stream key, used by the Go Live button. Example: rtmp://a.rtmp.youtube.com/live2/your-stream-key",
+    "type":             "string",
+    "default":     ""
+},
+{
     "name":             "tcpUrl",
     "shortDesc": "Video TCP Url",
     "longDesc":  "TCP url address and port to bind to for video stream. Example: 192.168.143.200:3001",

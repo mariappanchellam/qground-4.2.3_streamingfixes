@@ -26,6 +26,8 @@ env:
 jobs:
   build:
     runs-on:  ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -256,6 +258,24 @@ jobs:
         with:
           name: ${{ env.ARTIFACT }}
           path: ${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}
+
+      # Stable direct download: releases/download/mk15-latest/QGroundControl64.apk
+      - name: Publish APK to mk15-latest release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=mk15-latest
+          APK="${{ runner.temp }}/shadow_build_dir/package/${{ env.ARTIFACT }}"
+          NOTES="Debug-signed arm64-v8a QGroundControl build for the MK15. Branch ${GIT_BRANCH_NAME}, commit ${GITHUB_SHA}, run ${GITHUB_RUN_NUMBER}."
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "QGroundControl64 APK for MK15 (latest build)" --notes "$NOTES"
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+          fi
+          gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Direct link: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${{ env.ARTIFACT }}"
 
       - name: Upload build to S3 Bucket
         if:                 github.event_name == 'push'

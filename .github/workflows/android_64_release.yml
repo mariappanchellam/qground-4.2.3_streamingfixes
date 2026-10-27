@@ -65,6 +65,7 @@ jobs:
           target:       android
           dir:          ${{ runner.temp }}
           modules:      qtcharts
+          cache:        true
 
       - name: Verify Qt arm64 libraries are present
         run: |

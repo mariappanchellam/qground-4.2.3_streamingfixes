@@ -59,6 +59,9 @@ GstVideoReceiver::GstVideoReceiver(QObject* parent)
     , _liveStreamStopTime(0)
     , _liveStreamValve(nullptr)
     , _liveStreamSink(nullptr)
+    , _liveStreamStartMs(0)
+    , _liveStreamFramesSent(0)
+    , _liveStreamCountProbeId(0)
     , _lastSourceFrameTime(0)
     , _lastVideoFrameTime(0)
     , _resetVideoSink(true)
@@ -690,10 +693,15 @@ GstVideoReceiver::startLiveStream(const QString& url)
 
     gst_element_sync_state_with_parent(_liveStreamSink);
 
+    _liveStreamStartMs = QDateTime::currentMSecsSinceEpoch();
+    _liveStreamFramesSent.storeRelease(0);
+
     GstPad* probepad;
 
     if ((probepad = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
         gst_pad_add_probe(probepad, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamKeyframeWatch, this, nullptr);
+        // Added after the keyframe watch, so it only counts buffers that are actually forwarded
+        _liveStreamCountProbeId = gst_pad_add_probe(probepad, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamCountProbe, this, nullptr);
         gst_object_unref(probepad);
         probepad = nullptr;
     }
@@ -1517,6 +1525,11 @@ GstVideoReceiver::_shutdownLiveStreamBranch(void)
         GstPad* src;
 
         if ((src = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
+            if (_liveStreamCountProbeId != 0) {
+                gst_pad_remove_probe(src, _liveStreamCountProbeId);
+                _liveStreamCountProbeId = 0;
+            }
+
             GstPad* peer;
 
             if ((peer = gst_pad_get_peer(src)) != nullptr) {
@@ -1559,10 +1572,28 @@ GstVideoReceiver::_onLiveStreamError(const QString& message)
         return;
     }
 
+    const double seconds = (QDateTime::currentMSecsSinceEpoch() - _liveStreamStartMs) / 1000.0;
+    const int frames = _liveStreamFramesSent.loadAcquire();
+
     _shutdownLiveStreamBranch();
 
-    _dispatchSignal([this, message](){
-        emit liveStreamError(message);
+    // GStreamer 1.18's rtmp2sink reports a server hang-up only as "Connection error"; say when it happened
+    const bool couldNotReach = message.contains(QStringLiteral("Could not connect")) || message.contains(QStringLiteral("Failed to connect"));
+    QString detailed;
+    if (couldNotReach) {
+        detailed = tr("%1. Cannot reach the RTMP server: check the IP address and port (1935) in the URL, "
+                      "the MK15's internet connection and the server's firewall/security group.").arg(message);
+    } else if (frames == 0) {
+        detailed = tr("%1 (the server closed the connection %2 s after connecting, before any video was sent). "
+                      "The server is rejecting this stream: check the application name and stream key in the RTMP URL, "
+                      "and that no other device is already publishing to the same key.")
+                       .arg(message).arg(seconds, 0, 'f', 1);
+    } else {
+        detailed = tr("%1 (after %2 s, %3 video frames sent).").arg(message).arg(seconds, 0, 'f', 1).arg(frames);
+    }
+
+    _dispatchSignal([this, detailed](){
+        emit liveStreamError(detailed);
     });
 }
 
@@ -1595,11 +1626,6 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
 
             gst_message_parse_error(msg, &error, &debug);
 
-            if (debug != nullptr) {
-                g_free(debug);
-                debug = nullptr;
-            }
-
             QString errorText;
 
             if (error != nullptr) {
@@ -1607,6 +1633,18 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
                 errorText = QString::fromUtf8(error->message);
                 g_error_free(error);
                 error = nullptr;
+            }
+
+            if (debug != nullptr) {
+                // The debug string's last line usually carries the underlying reason (e.g. the socket
+                // error); skip GStreamer's "file(line): func (): /element/path" location line
+                const QString reason = QString::fromUtf8(debug).section('\n', -1).trimmed();
+                const bool isLocation = reason.contains(QStringLiteral("/GstPipeline:")) || reason.startsWith(QStringLiteral("../"));
+                if (!reason.isEmpty() && !isLocation && !errorText.contains(reason)) {
+                    errorText += QStringLiteral(": ") + reason;
+                }
+                g_free(debug);
+                debug = nullptr;
             }
 
             // A failing RTMP upload must only end the live stream, not the local video
@@ -1873,25 +1911,45 @@ GstVideoReceiver::_keyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer us
 GstPadProbeReturn
 GstVideoReceiver::_liveStreamKeyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data)
 {
-    Q_UNUSED(user_data)
-
-    if (info == nullptr) {
+    if (info == nullptr || user_data == nullptr) {
         return GST_PAD_PROBE_DROP;
     }
 
+    GstVideoReceiver* pThis = static_cast<GstVideoReceiver*>(user_data);
     GstBuffer* buf = gst_pad_probe_info_get_buffer(info);
 
-    // RTMP viewers can only start decoding at a keyframe
-    if (buf == nullptr || GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT)) {
+    if (buf == nullptr) {
         return GST_PAD_PROBE_DROP;
+    }
+
+    // RTMP viewers can only start decoding at a keyframe, but some cameras rarely or never send one
+    // (intra refresh); servers drop publishers that send nothing, so give up waiting after 3 s
+    if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT)) {
+        if (QDateTime::currentMSecsSinceEpoch() - pThis->_liveStreamStartMs < 3000) {
+            return GST_PAD_PROBE_DROP;
+        }
+        qCWarning(VideoReceiverLog) << "Live stream: no keyframe from the camera within 3 s, sending video anyway";
+    } else {
+        qCDebug(VideoReceiverLog) << "Live stream got keyframe, sending video";
     }
 
     // Start the FLV timeline at zero
     gst_pad_set_offset(pad, -static_cast<gint64>(buf->pts));
 
-    qCDebug(VideoReceiverLog) << "Live stream got keyframe, sending video";
-
     return GST_PAD_PROBE_REMOVE;
+}
+
+GstPadProbeReturn
+GstVideoReceiver::_liveStreamCountProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data)
+{
+    Q_UNUSED(pad)
+    Q_UNUSED(info)
+
+    if (user_data != nullptr) {
+        static_cast<GstVideoReceiver*>(user_data)->_liveStreamFramesSent.fetchAndAddRelaxed(1);
+    }
+
+    return GST_PAD_PROBE_OK;
 }
 
 bool

@@ -288,7 +288,7 @@ Rectangle {
         }
         QGCLabel {
             Layout.alignment:       Qt.AlignHCenter
-            Layout.maximumWidth:    ScreenTools.defaultFontPixelWidth * 20
+            Layout.maximumWidth:    ScreenTools.defaultFontPixelWidth * 30
             horizontalAlignment:    Text.AlignHCenter
             wrapMode:               Text.WordWrap
             text:                   _videoStreamManager.liveStreamStatus

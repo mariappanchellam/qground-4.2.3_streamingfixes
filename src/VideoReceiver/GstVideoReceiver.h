@@ -135,6 +135,7 @@ protected:
     static GstPadProbeReturn _eosProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _keyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _liveStreamKeyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
+    static GstPadProbeReturn _liveStreamCountProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static bool _isInLiveStreamBin(GstObject* object);
 
     bool                _streaming;
@@ -156,6 +157,9 @@ protected:
     qint64              _liveStreamStopTime;
     GstElement*         _liveStreamValve;
     GstElement*         _liveStreamSink;
+    qint64              _liveStreamStartMs;
+    QAtomicInt          _liveStreamFramesSent;
+    gulong              _liveStreamCountProbeId;
 
     qint64              _lastSourceFrameTime;
     qint64              _lastVideoFrameTime;

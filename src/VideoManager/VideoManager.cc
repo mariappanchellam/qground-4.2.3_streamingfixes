@@ -185,7 +185,7 @@ VideoManager::setToolbox(QGCToolbox *toolbox)
         }
         // Show the first failure only; retries keep failing silently while the status label shows the reason
         if (_liveStreamLastError.isEmpty()) {
-            qgcApp()->showAppMessage(tr("Live stream error: %1. Retrying every 5 seconds until you press Stop Live.").arg(message));
+            qgcApp()->showAppMessage(tr("Live stream error: %1\nRetrying every 5 seconds until you press Stop Live.").arg(message));
         }
         _liveStreamLastError = message;
         _liveStreamRetryTimer.start();

@@ -33,6 +33,15 @@
     "default":     ""
 },
 {
+    "name":             "liveStreamResolution",
+    "shortDesc": "Live Stream Resolution",
+    "longDesc":  "Resolution sent to the RTMP server. Original forwards the camera stream unchanged; the other choices re-encode it on this device at that resolution.",
+    "type":             "uint32",
+    "enumStrings":      "Original (no re-encoding),1080p,720p,480p,360p,240p,144p",
+    "enumValues":       "0,1080,720,480,360,240,144",
+    "default":     0
+},
+{
     "name":             "tcpUrl",
     "shortDesc": "Video TCP Url",
     "longDesc":  "TCP url address and port to bind to for video stream. Example: 192.168.143.200:3001",

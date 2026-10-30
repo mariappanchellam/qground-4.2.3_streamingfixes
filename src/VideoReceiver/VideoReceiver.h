@@ -76,8 +76,9 @@ public slots:
     virtual void stopDecoding(void) = 0;
     virtual void startRecording(const QString& videoFile, FILE_FORMAT format) = 0;
     virtual void stopRecording(void) = 0;
-    // Forwards the received H.264 stream, without re-encoding, to an RTMP server (url includes the stream key)
-    virtual void startLiveStream(const QString& url) = 0;
+    // Sends the received H.264 stream to an RTMP server (url includes the stream key).
+    // height 0 forwards the camera stream as-is; otherwise it is re-encoded at that height (e.g. 720)
+    virtual void startLiveStream(const QString& url, int height = 0) = 0;
     virtual void stopLiveStream(void) = 0;
     virtual void takeScreenshot(const QString& imageFile) = 0;
 };

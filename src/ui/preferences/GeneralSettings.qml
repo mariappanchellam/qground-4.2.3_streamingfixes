@@ -294,6 +294,17 @@ Rectangle {
                                 }
 
                                 QGCLabel {
+                                    text:       qsTr("Live Stream Resolution")
+                                    visible:    rtmpUrlLabel.visible && _videoSettings.liveStreamResolution.visible
+                                }
+                                FactComboBox {
+                                    Layout.preferredWidth:  _comboFieldWidth
+                                    fact:                   _videoSettings.liveStreamResolution
+                                    indexModel:             false
+                                    visible:                rtmpUrlLabel.visible && _videoSettings.liveStreamResolution.visible
+                                }
+
+                                QGCLabel {
                                     text:                   qsTr("Aspect Ratio")
                                     visible:                !_videoAutoStreamConfig && _isGst && _videoSettings.aspectRatio.visible
                                 }

@@ -25,6 +25,7 @@ public:
     DEFINE_SETTINGFACT(tcpUrl)
     DEFINE_SETTINGFACT(rtspUrl)
     DEFINE_SETTINGFACT(rtmpUrl)
+    DEFINE_SETTINGFACT(liveStreamResolution)
     DEFINE_SETTINGFACT(aspectRatio)
     DEFINE_SETTINGFACT(videoFit)
     DEFINE_SETTINGFACT(gridLines)

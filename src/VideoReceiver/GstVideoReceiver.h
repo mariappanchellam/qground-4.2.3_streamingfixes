@@ -95,7 +95,7 @@ public slots:
     virtual void stopDecoding(void);
     virtual void startRecording(const QString& videoFile, FILE_FORMAT format);
     virtual void stopRecording(void);
-    virtual void startLiveStream(const QString& url);
+    virtual void startLiveStream(const QString& url, int height = 0);
     virtual void stopLiveStream(void);
     virtual void takeScreenshot(const QString& imageFile);
 
@@ -107,7 +107,8 @@ protected:
     virtual GstElement* _makeSource(const QString& uri);
     virtual GstElement* _makeDecoder(GstCaps* caps = nullptr, GstElement* videoSink = nullptr);
     virtual GstElement* _makeFileSink(const QString& videoFile, FILE_FORMAT format);
-    virtual GstElement* _makeLiveStreamSink(const QString& url);
+    virtual GstElement* _makeLiveStreamSink(const QString& url, int height);
+    virtual GstElement* _makeLiveStreamEncoder(int bitrateKbps);
 
     virtual void _onNewSourcePad(GstPad* pad);
     virtual void _onNewDecoderPad(GstPad* pad);
@@ -120,7 +121,7 @@ protected:
     virtual void _shutdownDecodingBranch (void);
     virtual void _shutdownRecordingBranch(void);
     virtual void _shutdownLiveStreamBranch(void);
-    virtual void _onLiveStreamError(const QString& message);
+    virtual void _onLiveStreamError(const QString& message, const QString& sourceName = QString());
 
     bool _needDispatch(void);
     void _dispatchSignal(std::function<void()> emitter);
@@ -136,6 +137,7 @@ protected:
     static GstPadProbeReturn _keyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _liveStreamKeyframeWatch(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
     static GstPadProbeReturn _liveStreamCountProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
+    static void _onLiveStreamDecoderPad(GstElement* decoder, GstPad* pad, gpointer rawQueue);
     static bool _isInLiveStreamBin(GstObject* object);
 
     bool                _streaming;
@@ -159,7 +161,8 @@ protected:
     GstElement*         _liveStreamSink;
     qint64              _liveStreamStartMs;
     QAtomicInt          _liveStreamFramesSent;
-    gulong              _liveStreamCountProbeId;
+    bool                _liveStreamUsingHwEncoder;
+    bool                _liveStreamHwEncoderFailed;
 
     qint64              _lastSourceFrameTime;
     qint64              _lastVideoFrameTime;

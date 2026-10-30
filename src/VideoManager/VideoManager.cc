@@ -174,6 +174,15 @@ VideoManager::setToolbox(QGCToolbox *toolbox)
     _liveStreamRetryTimer.setInterval(5000);
     connect(&_liveStreamRetryTimer, &QTimer::timeout, this, &VideoManager::_startLiveStreamOnReceiver);
 
+    // Changing the resolution while live restarts the stream at the new resolution
+    connect(_videoSettings->liveStreamResolution(), &Fact::rawValueChanged, this, [this](){
+        if (_liveStreamEnabled && _videoReceiver[0]) {
+            _videoReceiver[0]->stopLiveStream();
+            _startLiveStreamOnReceiver();
+        }
+        _updateLiveStreamStatus();
+    });
+
     connect(_videoReceiver[0], &VideoReceiver::liveStreamingChanged, this, [this](bool active){
         _liveStreaming = active;
         _updateLiveStreamStatus();
@@ -419,7 +428,8 @@ VideoManager::_startLiveStreamOnReceiver()
         return;
     }
 
-    _videoReceiver[0]->startLiveStream(_videoSettings->rtmpUrl()->rawValue().toString().trimmed());
+    _videoReceiver[0]->startLiveStream(_videoSettings->rtmpUrl()->rawValue().toString().trimmed(),
+                                       _videoSettings->liveStreamResolution()->rawValue().toInt());
 #endif
 }
 
@@ -430,7 +440,8 @@ VideoManager::_updateLiveStreamStatus()
 
     if (_liveStreamEnabled) {
         if (_liveStreaming) {
-            status = tr("LIVE");
+            const int height = _videoSettings->liveStreamResolution()->rawValue().toInt();
+            status = height > 0 ? tr("LIVE %1p").arg(height) : tr("LIVE");
         } else if (!_liveStreamLastError.isEmpty()) {
             status = tr("Reconnecting: %1").arg(_liveStreamLastError);
         } else if (!_videoStarted[0]) {

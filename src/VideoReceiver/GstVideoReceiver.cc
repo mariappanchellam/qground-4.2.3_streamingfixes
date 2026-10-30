@@ -61,7 +61,8 @@ GstVideoReceiver::GstVideoReceiver(QObject* parent)
     , _liveStreamSink(nullptr)
     , _liveStreamStartMs(0)
     , _liveStreamFramesSent(0)
-    , _liveStreamCountProbeId(0)
+    , _liveStreamUsingHwEncoder(false)
+    , _liveStreamHwEncoderFailed(false)
     , _lastSourceFrameTime(0)
     , _lastVideoFrameTime(0)
     , _resetVideoSink(true)
@@ -637,18 +638,18 @@ GstVideoReceiver::stopRecording(void)
 }
 
 void
-GstVideoReceiver::startLiveStream(const QString& url)
+GstVideoReceiver::startLiveStream(const QString& url, int height)
 {
     if (_needDispatch()) {
         QString cachedUrl = url;
-        _slotHandler.dispatch([this, cachedUrl]() {
-            startLiveStream(cachedUrl);
+        _slotHandler.dispatch([this, cachedUrl, height]() {
+            startLiveStream(cachedUrl, height);
         });
         return;
     }
 
     // The URL carries the stream key, so only the host is logged
-    qCDebug(VideoReceiverLog) << "Starting live stream to" << QUrl(url).host() << _uri;
+    qCDebug(VideoReceiverLog) << "Starting live stream to" << QUrl(url).host() << "height" << height << _uri;
 
     if (_pipeline == nullptr || _liveStreamValve == nullptr) {
         _dispatchSignal([this](){
@@ -672,7 +673,10 @@ GstVideoReceiver::startLiveStream(const QString& url)
         _shutdownLiveStreamBranch();
     }
 
-    if ((_liveStreamSink = _makeLiveStreamSink(url)) == nullptr) {
+    _liveStreamStartMs = QDateTime::currentMSecsSinceEpoch();
+    _liveStreamFramesSent.storeRelease(0);
+
+    if ((_liveStreamSink = _makeLiveStreamSink(url, height)) == nullptr) {
         _dispatchSignal([this](){
             emit liveStreamError(tr("Unable to create the RTMP streaming pipeline"));
         });
@@ -693,15 +697,10 @@ GstVideoReceiver::startLiveStream(const QString& url)
 
     gst_element_sync_state_with_parent(_liveStreamSink);
 
-    _liveStreamStartMs = QDateTime::currentMSecsSinceEpoch();
-    _liveStreamFramesSent.storeRelease(0);
-
     GstPad* probepad;
 
     if ((probepad = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
         gst_pad_add_probe(probepad, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamKeyframeWatch, this, nullptr);
-        // Added after the keyframe watch, so it only counts buffers that are actually forwarded
-        _liveStreamCountProbeId = gst_pad_add_probe(probepad, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamCountProbe, this, nullptr);
         gst_object_unref(probepad);
         probepad = nullptr;
     }
@@ -781,6 +780,13 @@ GstVideoReceiver::_watchdog(void)
         if (_removingLiveStream && now - _liveStreamStopTime > 3) {
             qCDebug(VideoReceiverLog) << "Live stream did not finish after EOS, removing it" << _uri;
             _shutdownLiveStreamBranch();
+        }
+
+        // Some hardware encoders accept frames but never output any; detect that and fall back to x264
+        if (_liveStreaming && !_removingLiveStream && _liveStreamUsingHwEncoder &&
+                _liveStreamFramesSent.loadAcquire() == 0 &&
+                QDateTime::currentMSecsSinceEpoch() - _liveStreamStartMs > 8000) {
+            _onLiveStreamError(tr("no video output after 8 s"), QStringLiteral("liveencoder"));
         }
 
         if (_lastSourceFrameTime == 0) {
@@ -1096,35 +1102,81 @@ GstVideoReceiver::_makeFileSink(const QString& videoFile, FILE_FORMAT format)
     return fileSink;
 }
 
-GstElement*
-GstVideoReceiver::_makeLiveStreamSink(const QString& url)
+namespace {
+
+struct LiveStreamResolution {
+    int height;
+    int width;      // 16:9, multiples of 16 where possible for hardware encoders
+    int bitrateKbps;
+};
+
+const LiveStreamResolution kLiveStreamResolutions[] = {
+    { 1080, 1920, 4500 },
+    {  720, 1280, 2500 },
+    {  480,  848, 1200 },
+    {  360,  640,  800 },
+    {  240,  432,  500 },
+    {  144,  256,  250 },
+};
+
+const LiveStreamResolution* findLiveStreamResolution(int height)
 {
-    GstElement* liveSink = nullptr;
-    GstElement* queue = nullptr;
-    GstElement* parser = nullptr;
-    GstElement* mux = nullptr;
-    GstElement* sink = nullptr;
-    GstElement* bin = nullptr;
-    bool releaseElements = true;
+    for (const LiveStreamResolution& r : kLiveStreamResolutions) {
+        if (r.height == height) {
+            return &r;
+        }
+    }
+    return nullptr;
+}
+
+}
+
+// Original (height 0):  queue(leaky) --> h264parse --> flvmux --> rtmp2sink
+// Re-encoded:           queue(leaky) --> decodebin --> queue(leaky, raw) --> videoscale --> videoconvert
+//                       --> capsfilter(WxH) --> encoder --> h264parse --> flvmux --> rtmp2sink
+GstElement*
+GstVideoReceiver::_makeLiveStreamSink(const QString& url, int height)
+{
+    const LiveStreamResolution* resolution = findLiveStreamResolution(height);
+
+    _liveStreamUsingHwEncoder = false;
+
+    if (height != 0 && resolution == nullptr) {
+        qCCritical(VideoReceiverLog) << "Unsupported live stream height" << height;
+        return nullptr;
+    }
+
+    GstElement* bin = gst_bin_new(kLiveStreamBinName);
+
+    if (bin == nullptr) {
+        qCCritical(VideoReceiverLog) << "gst_bin_new('livestreambin') failed";
+        return nullptr;
+    }
+
+    // decodebin changes state asynchronously; without this the bin, added to an already PLAYING
+    // pipeline, completes at PAUSED and never continues to PLAYING, leaving rtmp2sink blocked
+    g_object_set(static_cast<gpointer>(bin), "async-handling", TRUE, nullptr);
+
+    // Elements are added to the bin as soon as they exist, so on failure unreffing the bin frees everything
+    auto add = [bin](const char* factory, const char* name = nullptr) -> GstElement* {
+        GstElement* element = gst_element_factory_make(factory, name);
+        if (element == nullptr) {
+            qCCritical(VideoReceiverLog) << "gst_element_factory_make('" << factory << "') failed";
+            return nullptr;
+        }
+        gst_bin_add(GST_BIN(bin), element);
+        return element;
+    };
+
+    bool ok = false;
 
     do {
-        if ((queue = gst_element_factory_make("queue", nullptr)) == nullptr) {
-            qCCritical(VideoReceiverLog) << "gst_element_factory_make('queue') failed";
-            break;
-        }
+        GstElement* queue = add("queue");
+        GstElement* parser = add("h264parse");
+        GstElement* mux = add("flvmux");
+        GstElement* sink = add("rtmp2sink");
 
-        if ((parser = gst_element_factory_make("h264parse", nullptr)) == nullptr) {
-            qCCritical(VideoReceiverLog) << "gst_element_factory_make('h264parse') failed";
-            break;
-        }
-
-        if ((mux = gst_element_factory_make("flvmux", nullptr)) == nullptr) {
-            qCCritical(VideoReceiverLog) << "gst_element_factory_make('flvmux') failed";
-            break;
-        }
-
-        if ((sink = gst_element_factory_make("rtmp2sink", nullptr)) == nullptr) {
-            qCCritical(VideoReceiverLog) << "gst_element_factory_make('rtmp2sink') failed";
+        if (!queue || !parser || !mux || !sink) {
             break;
         }
 
@@ -1141,55 +1193,142 @@ GstVideoReceiver::_makeLiveStreamSink(const QString& url)
         // sync=false: the camera stream is already live-paced, forward it as soon as it arrives.
         g_object_set(static_cast<gpointer>(sink), "location", qPrintable(url), "async", FALSE, "sync", FALSE, nullptr);
 
-        if ((bin = gst_bin_new(kLiveStreamBinName)) == nullptr) {
-            qCCritical(VideoReceiverLog) << "gst_bin_new('livestreambin') failed";
+        if (!gst_element_link_many(parser, mux, sink, nullptr)) {
+            qCCritical(VideoReceiverLog) << "Unable to link live stream muxer";
             break;
         }
 
-        gst_bin_add_many(GST_BIN(bin), queue, parser, mux, sink, nullptr);
+        if (resolution == nullptr) {
+            if (!gst_element_link(queue, parser)) {
+                qCCritical(VideoReceiverLog) << "Unable to link live stream queue";
+                break;
+            }
+        } else {
+            GstElement* decoder = add("decodebin");
+            GstElement* rawQueue = add("queue");
+            GstElement* scaler = add("videoscale");
+            GstElement* converter = add("videoconvert");
+            GstElement* sizeFilter = add("capsfilter");
 
-        releaseElements = false;
+            if (!decoder || !rawQueue || !scaler || !converter || !sizeFilter) {
+                break;
+            }
 
-        if (!gst_element_link_many(queue, parser, mux, sink, nullptr)) {
-            qCCritical(VideoReceiverLog) << "Unable to link live stream elements";
-            break;
+            GstElement* encoder = _makeLiveStreamEncoder(resolution->bitrateKbps);
+
+            if (encoder == nullptr) {
+                break;
+            }
+
+            gst_bin_add(GST_BIN(bin), encoder);
+
+            // If the encoder cannot keep up, drop whole decoded frames here (clean) rather than compressed data
+            g_object_set(static_cast<gpointer>(rawQueue),
+                         "leaky",            2,
+                         "max-size-buffers", 2u,
+                         "max-size-bytes",   0u,
+                         "max-size-time",    static_cast<guint64>(0),
+                         nullptr);
+
+            GstCaps* caps = gst_caps_new_simple("video/x-raw",
+                                                "width",              G_TYPE_INT,        resolution->width,
+                                                "height",             G_TYPE_INT,        resolution->height,
+                                                "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
+                                                nullptr);
+            g_object_set(static_cast<gpointer>(sizeFilter), "caps", caps, nullptr);
+            gst_caps_unref(caps);
+
+            if (!gst_element_link(queue, decoder) ||
+                    !gst_element_link_many(rawQueue, scaler, converter, sizeFilter, encoder, parser, nullptr)) {
+                qCCritical(VideoReceiverLog) << "Unable to link live stream encoder chain";
+                break;
+            }
+
+            g_signal_connect(decoder, "pad-added", G_CALLBACK(_onLiveStreamDecoderPad), rawQueue);
+
+            qCDebug(VideoReceiverLog) << "Live stream re-encoding to" << resolution->width << "x" << resolution->height
+                                      << resolution->bitrateKbps << "kbps" << (_liveStreamUsingHwEncoder ? "hardware" : "software");
         }
 
-        GstPad* pad;
+        // Counts the H.264 frames handed to the muxer, i.e. what actually goes to the server
+        GstPad* parserSrc = gst_element_get_static_pad(parser, "src");
+        if (parserSrc != nullptr) {
+            gst_pad_add_probe(parserSrc, GST_PAD_PROBE_TYPE_BUFFER, _liveStreamCountProbe, this, nullptr);
+            gst_object_unref(parserSrc);
+        }
 
-        if ((pad = gst_element_get_static_pad(queue, "sink")) == nullptr) {
+        GstPad* pad = gst_element_get_static_pad(queue, "sink");
+
+        if (pad == nullptr) {
             qCCritical(VideoReceiverLog) << "gst_element_get_static_pad(queue) failed";
             break;
         }
 
         GstPad* ghostpad = gst_ghost_pad_new("sink", pad);
-
         gst_object_unref(pad);
-        pad = nullptr;
 
         if (ghostpad == nullptr || !gst_element_add_pad(bin, ghostpad)) {
             qCCritical(VideoReceiverLog) << "Unable to add live stream ghost pad";
             break;
         }
 
-        liveSink = bin;
-        bin = nullptr;
+        ok = true;
     } while(0);
 
-    if (releaseElements) {
-        for (GstElement* element : { sink, mux, parser, queue }) {
-            if (element != nullptr) {
-                gst_object_unref(element);
+    if (!ok) {
+        gst_object_unref(bin);
+        return nullptr;
+    }
+
+    return bin;
+}
+
+// Prefers the device's hardware H.264 encoder (Android MediaCodec, "amcvidenc-*"); falls back to x264
+GstElement*
+GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
+{
+    GstElement* encoder = nullptr;
+
+    _liveStreamUsingHwEncoder = false;
+
+    if (!_liveStreamHwEncoderFailed) {
+        GList* encoders = gst_element_factory_list_get_elements(GST_ELEMENT_FACTORY_TYPE_VIDEO_ENCODER, GST_RANK_NONE);
+        GstCaps* h264 = gst_caps_from_string("video/x-h264");
+        GList* h264Encoders = gst_element_factory_list_filter(encoders, h264, GST_PAD_SRC, FALSE);
+
+        for (GList* item = h264Encoders; item != nullptr && encoder == nullptr; item = item->next) {
+            GstElementFactory* factory = GST_ELEMENT_FACTORY(item->data);
+            if (g_str_has_prefix(GST_OBJECT_NAME(factory), "amcvidenc")) {
+                if ((encoder = gst_element_factory_create(factory, "liveencoder")) != nullptr) {
+                    qCDebug(VideoReceiverLog) << "Live stream using hardware encoder" << GST_OBJECT_NAME(factory);
+                    g_object_set(static_cast<gpointer>(encoder),
+                                 "bitrate",          static_cast<guint>(bitrateKbps * 1000),
+                                 "i-frame-interval", 2u,
+                                 nullptr);
+                    _liveStreamUsingHwEncoder = true;
+                }
             }
         }
+
+        gst_plugin_feature_list_free(h264Encoders);
+        gst_plugin_feature_list_free(encoders);
+        gst_caps_unref(h264);
     }
 
-    if (bin != nullptr) {
-        gst_object_unref(bin);
-        bin = nullptr;
+    if (encoder == nullptr) {
+        if ((encoder = gst_element_factory_make("x264enc", "liveencoder")) == nullptr) {
+            qCCritical(VideoReceiverLog) << "No H.264 encoder available for the live stream";
+            return nullptr;
+        }
+        gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
+        gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "ultrafast");
+        g_object_set(static_cast<gpointer>(encoder),
+                     "bitrate",     static_cast<guint>(bitrateKbps),
+                     "key-int-max", 60u,
+                     nullptr);
     }
 
-    return liveSink;
+    return encoder;
 }
 
 void
@@ -1525,11 +1664,6 @@ GstVideoReceiver::_shutdownLiveStreamBranch(void)
         GstPad* src;
 
         if ((src = gst_element_get_static_pad(_liveStreamValve, "src")) != nullptr) {
-            if (_liveStreamCountProbeId != 0) {
-                gst_pad_remove_probe(src, _liveStreamCountProbeId);
-                _liveStreamCountProbeId = 0;
-            }
-
             GstPad* peer;
 
             if ((peer = gst_pad_get_peer(src)) != nullptr) {
@@ -1563,9 +1697,9 @@ GstVideoReceiver::_shutdownLiveStreamBranch(void)
 }
 
 void
-GstVideoReceiver::_onLiveStreamError(const QString& message)
+GstVideoReceiver::_onLiveStreamError(const QString& message, const QString& sourceName)
 {
-    qCWarning(VideoReceiverLog) << "Live stream error:" << message << _uri;
+    qCWarning(VideoReceiverLog) << "Live stream error:" << message << "from" << sourceName << _uri;
 
     // One failure is typically reported by several elements (sink, then queue); report it once
     if (_liveStreamSink == nullptr) {
@@ -1574,16 +1708,25 @@ GstVideoReceiver::_onLiveStreamError(const QString& message)
 
     const double seconds = (QDateTime::currentMSecsSinceEpoch() - _liveStreamStartMs) / 1000.0;
     const int frames = _liveStreamFramesSent.loadAcquire();
+    const bool hwEncoderFailed = _liveStreamUsingHwEncoder && sourceName == QStringLiteral("liveencoder");
+
+    if (hwEncoderFailed) {
+        // Hardware encoders vary a lot between devices; use x264 for the rest of this session
+        _liveStreamHwEncoderFailed = true;
+    }
 
     _shutdownLiveStreamBranch();
 
     // GStreamer 1.18's rtmp2sink reports a server hang-up only as "Connection error"; say when it happened
     const bool couldNotReach = message.contains(QStringLiteral("Could not connect")) || message.contains(QStringLiteral("Failed to connect"));
+    const bool serverHangUp = message.startsWith(QStringLiteral("Connection error"));
     QString detailed;
-    if (couldNotReach) {
+    if (hwEncoderFailed) {
+        detailed = tr("The hardware video encoder failed (%1). Switching to the software encoder.").arg(message);
+    } else if (couldNotReach) {
         detailed = tr("%1. Cannot reach the RTMP server: check the IP address and port (1935) in the URL, "
                       "the MK15's internet connection and the server's firewall/security group.").arg(message);
-    } else if (frames == 0) {
+    } else if (serverHangUp && frames == 0) {
         detailed = tr("%1 (the server closed the connection %2 s after connecting, before any video was sent). "
                       "The server is rejecting this stream: check the application name and stream key in the RTMP URL, "
                       "and that no other device is already publishing to the same key.")
@@ -1653,8 +1796,9 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
                 if (pThis->_liveStreamValve != nullptr) {
                     g_object_set(pThis->_liveStreamValve, "drop", TRUE, nullptr);
                 }
-                pThis->_slotHandler.dispatch([pThis, errorText](){
-                    pThis->_onLiveStreamError(errorText);
+                const QString sourceName = QString::fromUtf8(GST_MESSAGE_SRC_NAME(msg));
+                pThis->_slotHandler.dispatch([pThis, errorText, sourceName](){
+                    pThis->_onLiveStreamError(errorText, sourceName);
                 });
                 break;
             }
@@ -1950,6 +2094,39 @@ GstVideoReceiver::_liveStreamCountProbe(GstPad* pad, GstPadProbeInfo* info, gpoi
     }
 
     return GST_PAD_PROBE_OK;
+}
+
+void
+GstVideoReceiver::_onLiveStreamDecoderPad(GstElement* decoder, GstPad* pad, gpointer rawQueue)
+{
+    Q_UNUSED(decoder)
+
+    GstPad* sinkpad = gst_element_get_static_pad(GST_ELEMENT(rawQueue), "sink");
+
+    if (sinkpad == nullptr) {
+        return;
+    }
+
+    if (!gst_pad_is_linked(sinkpad)) {
+        GstCaps* caps = gst_pad_get_current_caps(pad);
+        if (caps == nullptr) {
+            caps = gst_pad_query_caps(pad, nullptr);
+        }
+
+        const GstStructure* s = caps != nullptr ? gst_caps_get_structure(caps, 0) : nullptr;
+
+        if (s != nullptr && g_str_has_prefix(gst_structure_get_name(s), "video/x-raw")) {
+            if (gst_pad_link(pad, sinkpad) != GST_PAD_LINK_OK) {
+                qCCritical(VideoReceiverLog) << "Unable to link live stream decoder output";
+            }
+        }
+
+        if (caps != nullptr) {
+            gst_caps_unref(caps);
+        }
+    }
+
+    gst_object_unref(sinkpad);
 }
 
 bool

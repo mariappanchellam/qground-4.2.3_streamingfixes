@@ -63,6 +63,8 @@ GstVideoReceiver::GstVideoReceiver(QObject* parent)
     , _liveStreamFramesSent(0)
     , _liveStreamUsingHwEncoder(false)
     , _liveStreamHwEncoderFailed(false)
+    , _testSourceUsingHwEncoder(false)
+    , _testSourceHwEncoderFailed(false)
     , _lastSourceFrameTime(0)
     , _lastVideoFrameTime(0)
     , _resetVideoSink(true)
@@ -846,6 +848,10 @@ GstVideoReceiver::_makeSource(const QString& uri)
         return nullptr;
     }
 
+    if (uri.startsWith(QStringLiteral("testsrc://"), Qt::CaseInsensitive)) {
+        return _makeTestSource();
+    }
+
     bool isTaisync  = uri.contains("tsusb://",  Qt::CaseInsensitive);
     bool isUdp264   = uri.contains("udp://",    Qt::CaseInsensitive);
     bool isRtsp     = uri.contains("rtsp://",   Qt::CaseInsensitive);
@@ -1283,15 +1289,15 @@ GstVideoReceiver::_makeLiveStreamSink(const QString& url, int height)
     return bin;
 }
 
-// Prefers the device's hardware H.264 encoder (Android MediaCodec, "amcvidenc-*"); falls back to x264
-GstElement*
-GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
+// Prefers the device's hardware H.264 encoder (Android MediaCodec, "amcvidenc-*") when allowed; falls back to x264
+static GstElement*
+makeH264Encoder(const char* name, int bitrateKbps, bool allowHardware, bool* usedHardware)
 {
     GstElement* encoder = nullptr;
 
-    _liveStreamUsingHwEncoder = false;
+    *usedHardware = false;
 
-    if (!_liveStreamHwEncoderFailed) {
+    if (allowHardware) {
         GList* encoders = gst_element_factory_list_get_elements(GST_ELEMENT_FACTORY_TYPE_VIDEO_ENCODER, GST_RANK_NONE);
         GstCaps* h264 = gst_caps_from_string("video/x-h264");
         GList* h264Encoders = gst_element_factory_list_filter(encoders, h264, GST_PAD_SRC, FALSE);
@@ -1299,13 +1305,13 @@ GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
         for (GList* item = h264Encoders; item != nullptr && encoder == nullptr; item = item->next) {
             GstElementFactory* factory = GST_ELEMENT_FACTORY(item->data);
             if (g_str_has_prefix(GST_OBJECT_NAME(factory), "amcvidenc")) {
-                if ((encoder = gst_element_factory_create(factory, "liveencoder")) != nullptr) {
-                    qCDebug(VideoReceiverLog) << "Live stream using hardware encoder" << GST_OBJECT_NAME(factory);
+                if ((encoder = gst_element_factory_create(factory, name)) != nullptr) {
+                    qCDebug(VideoReceiverLog) << name << "using hardware encoder" << GST_OBJECT_NAME(factory);
                     g_object_set(static_cast<gpointer>(encoder),
                                  "bitrate",          static_cast<guint>(bitrateKbps * 1000),
                                  "i-frame-interval", 2u,
                                  nullptr);
-                    _liveStreamUsingHwEncoder = true;
+                    *usedHardware = true;
                 }
             }
         }
@@ -1316,8 +1322,8 @@ GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
     }
 
     if (encoder == nullptr) {
-        if ((encoder = gst_element_factory_make("x264enc", "liveencoder")) == nullptr) {
-            qCCritical(VideoReceiverLog) << "No H.264 encoder available for the live stream";
+        if ((encoder = gst_element_factory_make("x264enc", name)) == nullptr) {
+            qCCritical(VideoReceiverLog) << "No H.264 encoder available for" << name;
             return nullptr;
         }
         gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
@@ -1329,6 +1335,94 @@ GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
     }
 
     return encoder;
+}
+
+GstElement*
+GstVideoReceiver::_makeLiveStreamEncoder(int bitrateKbps)
+{
+    bool hardware = false;
+    GstElement* encoder = makeH264Encoder("liveencoder", bitrateKbps, !_liveStreamHwEncoderFailed, &hardware);
+    _liveStreamUsingHwEncoder = hardware;
+    return encoder;
+}
+
+// Built-in test video (no camera needed): a moving 1080p pattern encoded to H.264, so it enters the
+// pipeline exactly like a camera stream (display, recording and live streaming all work unchanged).
+// Hardware encoding gives 30 fps; the x264 fallback uses 15 fps to keep the CPU load reasonable.
+GstElement*
+GstVideoReceiver::_makeTestSource(void)
+{
+    GstElement* bin = gst_bin_new("sourcebin");
+
+    if (bin == nullptr) {
+        return nullptr;
+    }
+
+    bool ok = false;
+
+    do {
+        GstElement* source = gst_element_factory_make("videotestsrc", "testsource");
+        GstElement* rawCaps = gst_element_factory_make("capsfilter", nullptr);
+        bool hardware = false;
+        GstElement* encoder = makeH264Encoder("testencoder", 4000, !_testSourceHwEncoderFailed, &hardware);
+        GstElement* parser = gst_element_factory_make("h264parse", nullptr);
+
+        for (GstElement* element : { source, rawCaps, encoder, parser }) {
+            if (element != nullptr) {
+                gst_bin_add(GST_BIN(bin), element);
+            }
+        }
+
+        if (!source || !rawCaps || !encoder || !parser) {
+            qCCritical(VideoReceiverLog) << "Unable to create the test video source";
+            break;
+        }
+
+        _testSourceUsingHwEncoder = hardware;
+
+        g_object_set(static_cast<gpointer>(source), "is-live", TRUE, "horizontal-speed", 4, nullptr);
+        gst_util_set_object_arg(G_OBJECT(source), "pattern", "smpte");
+
+        // I420 (4:2:0): otherwise the encoder may pick a 4:4:4 format, which hardware decoders cannot play
+        GstCaps* caps = gst_caps_new_simple("video/x-raw",
+                                            "format",    G_TYPE_STRING,     "I420",
+                                            "width",     G_TYPE_INT,        1920,
+                                            "height",    G_TYPE_INT,        1080,
+                                            "framerate", GST_TYPE_FRACTION, hardware ? 30 : 15, 1,
+                                            nullptr);
+        g_object_set(static_cast<gpointer>(rawCaps), "caps", caps, nullptr);
+        gst_caps_unref(caps);
+
+        g_object_set(static_cast<gpointer>(parser), "config-interval", -1, nullptr);
+
+        if (!gst_element_link_many(source, rawCaps, encoder, parser, nullptr)) {
+            qCCritical(VideoReceiverLog) << "Unable to link the test video source";
+            break;
+        }
+
+        GstPad* pad = gst_element_get_static_pad(parser, "src");
+        GstPad* ghostpad = pad != nullptr ? gst_ghost_pad_new("src", pad) : nullptr;
+
+        if (pad != nullptr) {
+            gst_object_unref(pad);
+        }
+
+        if (ghostpad == nullptr || !gst_element_add_pad(bin, ghostpad)) {
+            qCCritical(VideoReceiverLog) << "Unable to add the test video source pad";
+            break;
+        }
+
+        qCDebug(VideoReceiverLog) << "Test video source: 1920x1080 at" << (hardware ? 30 : 15) << "fps,"
+                                  << (hardware ? "hardware" : "software") << "encoder";
+        ok = true;
+    } while (0);
+
+    if (!ok) {
+        gst_object_unref(bin);
+        return nullptr;
+    }
+
+    return bin;
 }
 
 void
@@ -1801,6 +1895,12 @@ GstVideoReceiver::_onBusMessage(GstBus* bus, GstMessage* msg, gpointer data)
                     pThis->_onLiveStreamError(errorText, sourceName);
                 });
                 break;
+            }
+
+            // The test video's hardware encoder failed: the restart that follows uses x264 instead
+            if (pThis->_testSourceUsingHwEncoder && g_strcmp0(GST_MESSAGE_SRC_NAME(msg), "testencoder") == 0) {
+                qCWarning(VideoReceiverLog) << "Test video hardware encoder failed, switching to software";
+                pThis->_testSourceHwEncoderFailed = true;
             }
 
             pThis->_slotHandler.dispatch([pThis](){

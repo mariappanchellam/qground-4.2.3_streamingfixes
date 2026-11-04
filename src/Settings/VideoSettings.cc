@@ -29,6 +29,7 @@ const char* VideoSettings::videoSourceMPEGTS            = QT_TRANSLATE_NOOP("Vid
 const char* VideoSettings::videoSource3DRSolo           = QT_TRANSLATE_NOOP("VideoSettings", "3DR Solo (requires restart)");
 const char* VideoSettings::videoSourceParrotDiscovery   = QT_TRANSLATE_NOOP("VideoSettings", "Parrot Discovery");
 const char* VideoSettings::videoSourceYuneecMantisG     = QT_TRANSLATE_NOOP("VideoSettings", "Yuneec Mantis G");
+const char* VideoSettings::videoSourceTestPattern       = QT_TRANSLATE_NOOP("VideoSettings", "Test Video 1080p (no camera)");
 
 DECLARE_SETTINGGROUP(Video, "Video")
 {
@@ -47,6 +48,7 @@ DECLARE_SETTINGGROUP(Video, "Video")
     videoSourceList.append(videoSource3DRSolo);
     videoSourceList.append(videoSourceParrotDiscovery);
     videoSourceList.append(videoSourceYuneecMantisG);
+    videoSourceList.append(videoSourceTestPattern);
 #endif
 #ifndef QGC_DISABLE_UVC
     QList<QCameraInfo> cameras = QCameraInfo::availableCameras();
@@ -195,6 +197,10 @@ bool VideoSettings::streamConfigured(void)
     QString vSource = videoSource()->rawValue().toString();
     if(vSource == videoSourceNoVideo || vSource == videoDisabled) {
         return false;
+    }
+    //-- The built-in test video needs no configuration
+    if(vSource == videoSourceTestPattern) {
+        return true;
     }
     //-- If UDP, check if port is set
     if(vSource == videoSourceUDPH264 || vSource == videoSourceUDPH265) {

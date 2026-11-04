@@ -102,7 +102,8 @@ LinuxBuild {
             -lgstflv \
             -lgstrtmp2 \
             -lgstvideoconvert \
-            -lgstvideoscale
+            -lgstvideoscale \
+            -lgstvideotestsrc
 
         # Rest of GStreamer dependencies
         LIBS += -L$$GST_ROOT/lib \

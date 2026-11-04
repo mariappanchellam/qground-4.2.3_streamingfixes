@@ -94,6 +94,7 @@ G_BEGIN_DECLS
     GST_PLUGIN_STATIC_DECLARE(rtmp2);
     GST_PLUGIN_STATIC_DECLARE(videoconvert);
     GST_PLUGIN_STATIC_DECLARE(videoscale);
+    GST_PLUGIN_STATIC_DECLARE(videotestsrc);
 #elif defined(__ios__)
     GST_PLUGIN_STATIC_DECLARE(applemedia);
 #endif
@@ -228,6 +229,7 @@ GStreamer::initialize(int argc, char* argv[], int debuglevel)
     GST_PLUGIN_STATIC_REGISTER(rtmp2);
     GST_PLUGIN_STATIC_REGISTER(videoconvert);
     GST_PLUGIN_STATIC_REGISTER(videoscale);
+    GST_PLUGIN_STATIC_REGISTER(videotestsrc);
 #elif defined(__ios__)
     GST_PLUGIN_STATIC_REGISTER(applemedia);
 #endif

@@ -109,6 +109,7 @@ protected:
     virtual GstElement* _makeFileSink(const QString& videoFile, FILE_FORMAT format);
     virtual GstElement* _makeLiveStreamSink(const QString& url, int height);
     virtual GstElement* _makeLiveStreamEncoder(int bitrateKbps);
+    virtual GstElement* _makeTestSource(void);
 
     virtual void _onNewSourcePad(GstPad* pad);
     virtual void _onNewDecoderPad(GstPad* pad);
@@ -163,6 +164,8 @@ protected:
     QAtomicInt          _liveStreamFramesSent;
     bool                _liveStreamUsingHwEncoder;
     bool                _liveStreamHwEncoderFailed;
+    bool                _testSourceUsingHwEncoder;
+    bool                _testSourceHwEncoderFailed;
 
     qint64              _lastSourceFrameTime;
     qint64              _lastVideoFrameTime;

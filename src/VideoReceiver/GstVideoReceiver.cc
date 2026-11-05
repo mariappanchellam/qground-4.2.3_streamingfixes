@@ -854,7 +854,8 @@ GstVideoReceiver::_makeSource(const QString& uri)
 
     bool isTaisync  = uri.contains("tsusb://",  Qt::CaseInsensitive);
     bool isUdp264   = uri.contains("udp://",    Qt::CaseInsensitive);
-    bool isRtsp     = uri.contains("rtsp://",   Qt::CaseInsensitive);
+    bool isRtspTcp  = uri.contains("rtspt://",  Qt::CaseInsensitive);
+    bool isRtsp     = uri.contains("rtsp://",   Qt::CaseInsensitive) || isRtspTcp;
     bool isUdp265   = uri.contains("udp265://", Qt::CaseInsensitive);
     bool isTcpMPEGTS= uri.contains("tcp://",    Qt::CaseInsensitive);
     bool isUdpMPEGTS= uri.contains("mpegts://", Qt::CaseInsensitive);
@@ -875,7 +876,15 @@ GstVideoReceiver::_makeSource(const QString& uri)
             }
         } else if (isRtsp) {
             if ((source = gst_element_factory_make("rtspsrc", "source")) != nullptr) {
-                g_object_set(static_cast<gpointer>(source), "location", qPrintable(uri), "latency", 17, "udp-reconnect", 1, "timeout", _udpReconnect_us, NULL);
+                QString location = uri;
+                if (isRtspTcp) {
+                    location.replace(0, 5, QStringLiteral("rtsp"));
+                }
+                g_object_set(static_cast<gpointer>(source), "location", qPrintable(location), "latency", 17, "udp-reconnect", 1, "timeout", _udpReconnect_us, NULL);
+                if (isRtspTcp) {
+                    // TCP-interleaved RTP: no packet loss or reordering on lossy radio links (as SIYI's own app does)
+                    gst_util_set_object_arg(G_OBJECT(source), "protocols", "tcp");
+                }
             }
         } else if(isUdp264 || isUdp265 || isUdpMPEGTS || isTaisync) {
             if ((source = gst_element_factory_make("udpsrc", "source")) != nullptr) {

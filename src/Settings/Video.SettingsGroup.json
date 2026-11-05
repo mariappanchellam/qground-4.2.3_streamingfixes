@@ -155,9 +155,16 @@
 {
     "name":             "lowLatencyMode",
     "shortDesc": "Tweaks video for lower latency",
-    "longDesc":  "If this option is enabled, the rtpjitterbuffer is removed and the video sink is set to assynchronous mode, reducing the latency by about 200 ms.",
+    "longDesc":  "If this option is enabled, the rtpjitterbuffer is removed and the video sink is set to assynchronous mode, so decoded frames are shown immediately instead of being paced (and dropped when late) against the clock. Recommended for SIYI cameras.",
     "type":             "bool",
-    "default":     false
+    "default":     true
+},
+{
+    "name":             "rtspUseTcp",
+    "shortDesc": "RTSP over TCP",
+    "longDesc":  "Receive the RTSP video over TCP (interleaved) instead of UDP, so packet loss on the radio link cannot corrupt frames. This is how SIYI's own app receives the ZR10 stream. Turn off for cameras that only support RTSP over UDP.",
+    "type":             "bool",
+    "default":     true
 },
 {
     "name":             "forceVideoDecoder",

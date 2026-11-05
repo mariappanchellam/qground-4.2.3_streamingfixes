@@ -271,6 +271,16 @@ Rectangle {
                                 }
 
                                 QGCLabel {
+                                    text:       qsTr("RTSP over TCP")
+                                    visible:    rtspUrlLabel.visible && _videoSettings.rtspUseTcp.visible
+                                }
+                                FactCheckBox {
+                                    text:       ""
+                                    fact:       _videoSettings.rtspUseTcp
+                                    visible:    rtspUrlLabel.visible && _videoSettings.rtspUseTcp.visible
+                                }
+
+                                QGCLabel {
                                     id:         tcpUrlLabel
                                     text:       qsTr("TCP URL")
                                     visible:    !_videoAutoStreamConfig && _isTCP && _videoSettings.tcpUrl.visible

@@ -147,6 +147,14 @@ Item {
         property bool _verticalCenter: !QGroundControl.settingsManager.flyViewSettings.alternateInstrumentPanel.rawValue
     }
 
+    SiyiCameraControl {
+        id:                 siyiCameraControl
+        anchors.margins:    _toolsMargin
+        anchors.right:      parent.right
+        anchors.top:        photoVideoControl.visible ? photoVideoControl.bottom : instrumentPanel.bottom
+        width:              _rightPanelWidth
+    }
+
     TelemetryValuesBar {
         id:                 telemetryPanel
         x:                  recalcXPosition()

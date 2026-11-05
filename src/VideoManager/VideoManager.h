@@ -21,6 +21,7 @@
 #include "VideoReceiver.h"
 #include "QGCToolbox.h"
 #include "SubtitleWriter.h"
+#include "SiyiCameraController.h"
 
 Q_DECLARE_LOGGING_CATEGORY(VideoManagerLog)
 
@@ -58,6 +59,7 @@ public:
     Q_PROPERTY(bool             liveStreamEnabled       READ    liveStreamEnabled                           NOTIFY liveStreamChanged)
     Q_PROPERTY(bool             liveStreaming           READ    liveStreaming                               NOTIFY liveStreamChanged)
     Q_PROPERTY(QString          liveStreamStatus        READ    liveStreamStatus                            NOTIFY liveStreamChanged)
+    Q_PROPERTY(SiyiCameraController* siyiCamera         READ    siyiCamera                                  CONSTANT)
 
     virtual bool        hasVideo            ();
     virtual bool        isGStreamer         ();
@@ -92,6 +94,7 @@ public:
     bool    liveStreamEnabled   (void) { return _liveStreamEnabled; }
     bool    liveStreaming       (void) { return _liveStreaming; }
     QString liveStreamStatus    (void) { return _liveStreamStatus; }
+    SiyiCameraController* siyiCamera(void) { return _siyiCamera; }
 
 // FIXME: AV: they should be removed after finishing multiple video stream support
 // new arcitecture does not assume direct access to video receiver from QML side, even if it works for now
@@ -192,6 +195,7 @@ protected:
     QString                 _liveStreamStatus;
     QString                 _liveStreamLastError;
     QTimer                  _liveStreamRetryTimer;
+    SiyiCameraController*   _siyiCamera             = nullptr;
 };
 
 #endif

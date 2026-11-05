@@ -33,6 +33,20 @@
     "default":     ""
 },
 {
+    "name":             "siyiCameraControls",
+    "shortDesc": "SIYI Camera Controls",
+    "longDesc":  "Show zoom, gimbal, photo and record controls for a SIYI gimbal camera (ZR10, ZR30, A8 mini) in the Fly view. The app talks to the camera directly over the SIYI SDK (UDP port 37260).",
+    "type":             "bool",
+    "default":     false
+},
+{
+    "name":             "siyiCameraIp",
+    "shortDesc": "SIYI Camera IP",
+    "longDesc":  "IP address of the SIYI gimbal camera. The SIYI default is 192.168.144.25.",
+    "type":             "string",
+    "default":     "192.168.144.25"
+},
+{
     "name":             "liveStreamResolution",
     "shortDesc": "Live Stream Resolution",
     "longDesc":  "Resolution sent to the RTMP server. Original forwards the camera stream unchanged; the other choices re-encode it on this device at that resolution.",

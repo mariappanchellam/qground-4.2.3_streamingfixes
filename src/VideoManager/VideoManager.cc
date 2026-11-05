@@ -92,9 +92,23 @@ VideoManager::setToolbox(QGCToolbox *toolbox)
    QQmlEngine::setObjectOwnership(this, QQmlEngine::CppOwnership);
    qmlRegisterUncreatableType<VideoManager> ("QGroundControl.VideoManager", 1, 0, "VideoManager", "Reference only");
    qmlRegisterUncreatableType<VideoReceiver>("QGroundControl",              1, 0, "VideoReceiver","Reference only");
+   qmlRegisterUncreatableType<SiyiCameraController>("QGroundControl",       1, 0, "SiyiCameraController", "Reference only");
 
    // TODO: Those connections should be Per Video, not per VideoManager.
    _videoSettings = toolbox->settingsManager()->videoSettings();
+
+   _siyiCamera = new SiyiCameraController(this);
+   _siyiCamera->setHost(_videoSettings->siyiCameraIp()->rawValue().toString());
+   _siyiCamera->setEnabled(_videoSettings->siyiCameraControls()->rawValue().toBool());
+   connect(_videoSettings->siyiCameraIp(), &Fact::rawValueChanged, this, [this](QVariant value){
+       _siyiCamera->setHost(value.toString());
+   });
+   connect(_videoSettings->siyiCameraControls(), &Fact::rawValueChanged, this, [this](QVariant value){
+       _siyiCamera->setEnabled(value.toBool());
+   });
+   connect(_siyiCamera, &SiyiCameraController::cameraMessage, this, [](const QString& message){
+       qgcApp()->showAppMessage(message);
+   });
    QString videoSource = _videoSettings->videoSource()->rawValue().toString();
    connect(_videoSettings->videoSource(),   &Fact::rawValueChanged, this, &VideoManager::_videoSourceChanged);
    connect(_videoSettings->udpPort(),       &Fact::rawValueChanged, this, &VideoManager::_udpPortChanged);

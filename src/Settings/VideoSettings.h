@@ -26,6 +26,8 @@ public:
     DEFINE_SETTINGFACT(rtspUrl)
     DEFINE_SETTINGFACT(rtmpUrl)
     DEFINE_SETTINGFACT(liveStreamResolution)
+    DEFINE_SETTINGFACT(siyiCameraControls)
+    DEFINE_SETTINGFACT(siyiCameraIp)
     DEFINE_SETTINGFACT(aspectRatio)
     DEFINE_SETTINGFACT(videoFit)
     DEFINE_SETTINGFACT(gridLines)

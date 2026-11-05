@@ -305,6 +305,26 @@ Rectangle {
                                 }
 
                                 QGCLabel {
+                                    text:       qsTr("SIYI Camera Controls (ZR10)")
+                                    visible:    _videoSettings.siyiCameraControls.visible
+                                }
+                                FactCheckBox {
+                                    text:       ""
+                                    fact:       _videoSettings.siyiCameraControls
+                                    visible:    _videoSettings.siyiCameraControls.visible
+                                }
+
+                                QGCLabel {
+                                    text:       qsTr("SIYI Camera IP")
+                                    visible:    _videoSettings.siyiCameraControls.rawValue && _videoSettings.siyiCameraIp.visible
+                                }
+                                FactTextField {
+                                    Layout.preferredWidth:  _comboFieldWidth
+                                    fact:                   _videoSettings.siyiCameraIp
+                                    visible:                _videoSettings.siyiCameraControls.rawValue && _videoSettings.siyiCameraIp.visible
+                                }
+
+                                QGCLabel {
                                     text:                   qsTr("Aspect Ratio")
                                     visible:                !_videoAutoStreamConfig && _isGst && _videoSettings.aspectRatio.visible
                                 }

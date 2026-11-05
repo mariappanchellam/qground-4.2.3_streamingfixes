@@ -1456,10 +1456,12 @@ INCLUDEPATH += \
     src/VideoManager
 
 HEADERS += \
+    src/VideoManager/SiyiCameraController.h \
     src/VideoManager/SubtitleWriter.h \
     src/VideoManager/VideoManager.h
 
 SOURCES += \
+    src/VideoManager/SiyiCameraController.cc \
     src/VideoManager/SubtitleWriter.cc \
     src/VideoManager/VideoManager.cc
 

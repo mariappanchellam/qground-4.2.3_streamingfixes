@@ -315,7 +315,7 @@ Rectangle {
                                 }
 
                                 QGCLabel {
-                                    text:       qsTr("SIYI Camera Controls (ZR10)")
+                                    text:       qsTr("SIYI Camera Controls (ZR10 / ZT6)")
                                     visible:    _videoSettings.siyiCameraControls.visible
                                 }
                                 FactCheckBox {

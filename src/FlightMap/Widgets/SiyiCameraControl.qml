@@ -15,10 +15,11 @@ import QGroundControl.ScreenTools   1.0
 import QGroundControl.Controls      1.0
 import QGroundControl.Palette       1.0
 
-// Zoom, gimbal, photo and record controls for a SIYI gimbal camera (ZR10, ZR30, A8 mini).
+// Zoom, gimbal, photo and record controls for a SIYI gimbal camera (ZR10, ZT6, ZR30, A8 mini).
 // Tap the header to collapse the panel to one line.
 Rectangle {
     id:         root
+    width:      mainLayout.width + (_margins * 2)
     height:     mainLayout.height + (_margins * 2)
     color:      "#80000000"
     radius:     _margins
@@ -44,8 +45,8 @@ Rectangle {
         QGCLabel {
             Layout.alignment:   Qt.AlignHCenter
             text:               (_camera.connected ?
-                                     qsTr("ZR10 %1x  P %2° Y %3°").arg(_camera.zoom.toFixed(1)).arg(_camera.pitch.toFixed(0)).arg(_camera.yaw.toFixed(0)) :
-                                     qsTr("ZR10 not connected")) + (_expanded ? "  ▴" : "  ▾")
+                                     qsTr("SIYI %1x  P %2° Y %3°").arg(_camera.zoom.toFixed(1)).arg(_camera.pitch.toFixed(0)).arg(_camera.yaw.toFixed(0)) :
+                                     qsTr("Camera not connected")) + (_expanded ? "  ▴" : "  ▾")
             color:              _camera.connected ? qgcPal.text : qgcPal.colorOrange
             font.pointSize:     ScreenTools.smallFontPointSize
             font.bold:          true
@@ -54,6 +55,16 @@ Rectangle {
                 fillItem:   parent
                 onClicked:  _expanded = !_expanded
             }
+        }
+
+        QGCLabel {
+            Layout.alignment:       Qt.AlignHCenter
+            Layout.maximumWidth:    _buttonSize * 6
+            horizontalAlignment:    Text.AlignHCenter
+            wrapMode:               Text.WordWrap
+            text:                   qsTr("Looking for camera at %1:37260. Change the IP in Settings > General > Video.").arg(_camera.host)
+            font.pointSize:         ScreenTools.smallFontPointSize
+            visible:                _expanded && !_camera.connected
         }
 
         // Gimbal arrows (hold to turn, centre button re-centres) and zoom (hold + / -, 1x resets)

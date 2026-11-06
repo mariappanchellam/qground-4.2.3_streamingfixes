@@ -147,12 +147,14 @@ Item {
         property bool _verticalCenter: !QGroundControl.settingsManager.flyViewSettings.alternateInstrumentPanel.rawValue
     }
 
+    // SIYI camera controls sit in their own column just left of the right-hand panels,
+    // so they stay on screen however tall the instrument and video panels are.
     SiyiCameraControl {
         id:                 siyiCameraControl
-        anchors.margins:    _toolsMargin
+        anchors.top:        parent.top
+        anchors.topMargin:  _toolsMargin
         anchors.right:      parent.right
-        anchors.top:        photoVideoControl.visible ? photoVideoControl.bottom : instrumentPanel.bottom
-        width:              _rightPanelWidth
+        anchors.rightMargin: _rightPanelWidth + (_toolsMargin * 2)
     }
 
     TelemetryValuesBar {

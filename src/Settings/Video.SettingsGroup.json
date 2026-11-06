@@ -35,9 +35,9 @@
 {
     "name":             "siyiCameraControls",
     "shortDesc": "SIYI Camera Controls",
-    "longDesc":  "Show zoom, gimbal, photo and record controls for a SIYI gimbal camera (ZR10, ZR30, A8 mini) in the Fly view. The app talks to the camera directly over the SIYI SDK (UDP port 37260).",
+    "longDesc":  "Show zoom, gimbal, photo and record controls for a SIYI gimbal camera (ZR10, ZT6, ZR30, A8 mini) in the Fly view. The app talks to the camera directly over the SIYI SDK (UDP port 37260).",
     "type":             "bool",
-    "default":     false
+    "default":     true
 },
 {
     "name":             "siyiCameraIp",
